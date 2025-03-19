@@ -66,11 +66,30 @@ const apiService = {
     return api.post('/ai/chat', { message });
   },
   
-  beautify: async (text, inputType = 'text/plain') => {
-    return api.post('/ai/beautify', { text, inputType });
+  beautify: async (text, inputType = 'text/plain', generatePdf = false) => {
+    console.log('API client - beautify - PDF flag:', { generatePdf, type: typeof generatePdf });
+    
+    try {
+      const response = await api.post('/ai/beautify', { 
+        text, 
+        inputType, 
+        generatePdf: generatePdf ? 'true' : 'false' 
+      });
+      
+      // Log if PDF was received
+      console.log('API client - beautify response - PDF included:', { 
+        hasPdf: !!response.data.pdf,
+        pdfDataLength: response.data.pdf ? response.data.pdf.length : 0
+      });
+      
+      return response;
+    } catch (error) {
+      console.error('API client - beautify error:', error);
+      throw error;
+    }
   },
   
-  beautifyWithFile: async (file, inputType = null) => {
+  beautifyWithFile: async (file, inputType = null, additionalText = '', generatePdf = false) => {
     const formData = new FormData();
     formData.append('file', file);
     
@@ -78,22 +97,53 @@ const apiService = {
     formData.append('fileName', file.name);
     formData.append('fileType', file.type);
     
-    // If we have additional text input
+    // Add the additional text if provided
+    if (additionalText && additionalText.trim()) {
+      formData.append('text', additionalText);
+    }
+    
+    // If we have input type
     if (inputType) {
       formData.append('inputType', inputType);
     }
     
-    logger.debug('API', 'Uploading file', { 
-      fileName: file.name, 
-      fileSize: file.size, 
-      fileType: file.type 
+    // Ensure generatePdf is explicitly sent as a string 'true' or 'false'
+    console.log('API client - beautifyWithFile - PDF flag:', { 
+      generatePdf, 
+      type: typeof generatePdf,
+      convertedValue: generatePdf ? 'true' : 'false'
     });
     
-    return api.post('/ai/beautify', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
+    formData.append('generatePdf', generatePdf ? 'true' : 'false');
+    
+    logger.debug('API', 'Uploading file with FormData', { 
+      fileName: file.name, 
+      fileSize: file.size, 
+      fileType: file.type,
+      hasAdditionalText: !!additionalText?.trim(),
+      generatePdf,
+      generatePdfType: typeof generatePdf,
+      generatePdfValue: generatePdf ? 'true' : 'false'
     });
+    
+    try {
+      const response = await api.post('/ai/beautify', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      
+      // Log if PDF was received
+      console.log('API client - beautifyWithFile response - PDF included:', { 
+        hasPdf: !!response.data.pdf,
+        pdfDataLength: response.data.pdf ? response.data.pdf.length : 0
+      });
+      
+      return response;
+    } catch (error) {
+      console.error('API client - beautifyWithFile error:', error);
+      throw error;
+    }
   },
   
   processFile: async (userId, file) => {
@@ -110,6 +160,63 @@ const apiService = {
   
   processText: async (userId, text) => {
     return api.post('/process', { userId, text });
+  },
+  
+  generateVisuals: async (diagramPrompts, flowchartPrompts, flowchartConcepts) => {
+    return api.post('/ai/generate-visuals', { 
+      diagramPrompts, 
+      flowchartPrompts,
+      flowchartConcepts 
+    });
+  },
+  
+  generatePdf: async (beautifiedOutput, diagrams, flowcharts) => {
+    console.log('API client - generatePdf called with:', {
+      hasDiagrams: diagrams?.length > 0,
+      hasFlowcharts: flowcharts?.length > 0,
+      diagramCount: diagrams?.length || 0,
+      flowchartCount: flowcharts?.length || 0
+    });
+    
+    try {
+      // Consider optimizing large base64 image data to avoid payload size issues
+      const optimizedDiagrams = diagrams?.map(diagram => {
+        if (diagram.image && diagram.image.length > 200000) {
+          console.log(`Large diagram detected (${(diagram.image.length/1024).toFixed(2)}KB), consider server-side optimization`);
+        }
+        return diagram;
+      });
+      
+      const optimizedFlowcharts = flowcharts?.map(flowchart => {
+        if (flowchart.image && flowchart.image.length > 200000) {
+          console.log(`Large flowchart detected (${(flowchart.image.length/1024).toFixed(2)}KB), consider server-side optimization`);
+        }
+        return flowchart;
+      });
+      
+      const response = await api.post('/ai/generate-pdf', {
+        beautifiedOutput,
+        diagrams: optimizedDiagrams || [],
+        flowcharts: optimizedFlowcharts || []
+      });
+      
+      // Log if PDF was received
+      console.log('API client - generatePdf response - PDF included:', { 
+        hasPdf: !!response.data.pdf,
+        pdfSize: response.data.pdf ? response.data.pdf.length : 0
+      });
+      
+      return response;
+    } catch (error) {
+      // Provide better feedback for payload errors
+      if (error.response?.status === 413) {
+        console.error('API client - generatePdf error: Payload too large', error.response?.data);
+        throw new Error('The data is too large to process. Try reducing the number of visuals or their complexity.');
+      }
+      
+      console.error('API client - generatePdf error:', error);
+      throw error;
+    }
   }
 };
 

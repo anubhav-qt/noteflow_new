@@ -6,7 +6,6 @@ const admin = require('firebase-admin');
 const multer = require('multer');
 const path = require('path');
 const aiRoutes = require('./routes/aiRoutes');
-const requestLogger = require('./middleware/loggerMiddleware');
 
 // Log environment variables for debugging (redact sensitive info)
 console.log('Environment check:', {
@@ -51,9 +50,10 @@ const bucket = admin.storage().bucket();
 
 // Middleware
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(requestLogger); // Add request logging middleware
+// Increase the JSON payload limit to 10MB (10 * 1024 * 1024 bytes)
+app.use(express.json({ limit: '10mb' }));
+// Also increase the URL-encoded payload limit for consistency
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Configure multer for file uploads
 const storage = multer.memoryStorage();
@@ -157,12 +157,27 @@ async function processInput(noteId, type, content) {
   });
 }
 
-// Error handling middleware with logging
+// Add a specific error handler for payload size errors
 app.use((err, req, res, next) => {
-  const timestamp = new Date().toISOString();
-  const requestId = req.requestId || 'unknown';
+  if (err.type === 'entity.too.large') {
+    console.error(`PAYLOAD_ERROR: Request entity too large - ${err.limit} bytes limit exceeded`);
+    return res.status(413).json({ 
+      error: 'Payload Too Large', 
+      message: `The request data exceeds the ${(err.limit/1024/1024).toFixed(2)}MB limit. Please reduce the size of your request.`,
+      details: {
+        limit: `${(err.limit/1024/1024).toFixed(2)}MB`,
+        requested: `${(err.length/1024/1024).toFixed(2)}MB`
+      }
+    });
+  }
   
-  console.error(`[${timestamp}] [${requestId}] ERROR:`, err);
+  // Pass to the general error handler for other errors
+  next(err);
+});
+
+// Error handling middleware with simpler logging
+app.use((err, req, res, next) => {
+  console.error(`ERROR:`, err);
   
   res.status(500).json({ 
     error: 'Server error', 
