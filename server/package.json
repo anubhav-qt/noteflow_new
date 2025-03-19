@@ -1,0 +1,23 @@
+{
+  "name": "noteflow-server",
+  "version": "1.0.0",
+  "description": "Backend for NoteFlow note generation application",
+  "main": "server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "dependencies": {
+    "@genkit-ai/googleai": "^1.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "firebase-admin": "^11.11.1",
+    "genkit": "^1.2.0",
+    "multer": "^1.4.5-lts.1",
+    "pdf-lib": "^1.17.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
