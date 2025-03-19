@@ -1,17 +1,25 @@
-import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { auth } from '../firebase/config';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { useTheme } from '../contexts/ThemeContext';
 
 function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { isDarkMode } = useTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(location.state?.isSignUp || false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Check for isSignUp in location state when the component mounts
+  useEffect(() => {
+    if (location.state?.isSignUp) {
+      setIsSignUp(true);
+    }
+  }, [location.state]);
 
   const handleAuth = async (e) => {
     e.preventDefault();
