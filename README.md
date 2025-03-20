@@ -60,8 +60,4 @@ npm run server
 - Tailwind CSS (Styling)
 - Express (Backend)
 - Firebase (Authentication, Database, Storage)
-- PDF generation libraries
-
-## License
-
-This project is private and confidential.
+- PDF generation library: PDF-lib.
