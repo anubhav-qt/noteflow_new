@@ -162,8 +162,13 @@ router.post('/generate-pdf', async (req, res) => {
       return res.status(400).json({ error: 'No content provided for PDF generation' });
     }
     
-    const diagramCount = Array.isArray(diagrams) ? diagrams.length : 0;
-    const flowchartCount = Array.isArray(flowcharts) ? flowcharts.length : 0;
+    // Validate input objects to prevent undefined errors
+    const validatedBeautifiedOutput = beautifiedOutput || {};
+    const validatedDiagrams = Array.isArray(diagrams) ? diagrams : [];
+    const validatedFlowcharts = Array.isArray(flowcharts) ? flowcharts : [];
+    
+    const diagramCount = validatedDiagrams.length;
+    const flowchartCount = validatedFlowcharts.length;
     
     console.log('PDF Generation Request:', {
       hasDiagrams: diagramCount > 0,
@@ -186,64 +191,179 @@ router.post('/generate-pdf', async (req, res) => {
       // Import visualUtils
       const visualUtils = require('../utils/visualUtils');
       
-      // Process diagrams and flowcharts
+      // Process diagrams and flowcharts with more robust error handling
       const processedDiagrams = [];
       const processedFlowcharts = [];
       
-      // Process diagrams - convert base64 to buffers
-      if (Array.isArray(diagrams) && diagrams.length > 0) {
-        for (const diagram of diagrams) {
-          if (diagram.image) {
+      // Process diagrams - convert base64 to buffers with validation
+      if (Array.isArray(validatedDiagrams) && validatedDiagrams.length > 0) {
+        console.log(`Processing ${validatedDiagrams.length} diagrams:`);
+        for (let i = 0; i < validatedDiagrams.length; i++) {
+          if (validatedDiagrams[i] && validatedDiagrams[i].image) {
+            try {
+              const imageBuffer = Buffer.from(validatedDiagrams[i].image, 'base64');
+              console.log(`Diagram #${i+1}: Successfully created buffer (${imageBuffer.length} bytes)`);
+              
+              processedDiagrams.push({
+                index: validatedDiagrams[i].index || 0,
+                buffer: imageBuffer,
+                prompt: validatedDiagrams[i].prompt || '',
+                error: null
+              });
+            } catch (bufferError) {
+              console.error(`Error processing diagram #${i+1} buffer:`, bufferError);
+              processedDiagrams.push({
+                index: validatedDiagrams[i].index || 0,
+                buffer: null,
+                error: `Invalid image data: ${bufferError.message}`
+              });
+            }
+          } else if (validatedDiagrams[i] && validatedDiagrams[i].error) {
+            console.log(`Diagram #${i+1}: Has error, no image data`);
             processedDiagrams.push({
-              index: diagram.index,
-              buffer: Buffer.from(diagram.image, 'base64'),
-              error: null
-            });
-          } else if (diagram.error) {
-            processedDiagrams.push({
-              index: diagram.index,
+              index: validatedDiagrams[i].index || 0,
               buffer: null,
-              error: diagram.error
+              error: validatedDiagrams[i].error
             });
           }
         }
       }
       
-      // Process flowcharts - convert base64 to buffers
-      if (Array.isArray(flowcharts) && flowcharts.length > 0) {
-        for (const flowchart of flowcharts) {
-          if (flowchart.image) {
+      // Process flowcharts - convert base64 to buffers with validation
+      if (Array.isArray(validatedFlowcharts) && validatedFlowcharts.length > 0) {
+        console.log(`Processing ${validatedFlowcharts.length} flowcharts:`);
+        for (let i = 0; i < validatedFlowcharts.length; i++) {
+          if (validatedFlowcharts[i] && validatedFlowcharts[i].image) {
+            try {
+              // Ensure we're working with a clean base64 string
+              let base64Data = validatedFlowcharts[i].image;
+              
+              // Handle potential prefix in base64 data
+              if (base64Data.includes(',')) {
+                base64Data = base64Data.split(',')[1];
+              }
+              
+              // Create buffer from base64
+              const imageBuffer = Buffer.from(base64Data, 'base64');
+              console.log(`Flowchart #${i+1} "${validatedFlowcharts[i].name}": Successfully created buffer (${imageBuffer.length} bytes)`);
+              
+              // Verify buffer has actual content
+              if (imageBuffer.length > 100) {  // Arbitrary minimum size for a valid image
+                processedFlowcharts.push({
+                  index: validatedFlowcharts[i].index || 0,
+                  name: validatedFlowcharts[i].name || `Flowchart ${i+1}`,
+                  buffer: imageBuffer,
+                  error: null
+                });
+              } else {
+                console.warn(`Flowchart #${i+1} buffer too small (${imageBuffer.length} bytes), may be invalid`);
+                processedFlowcharts.push({
+                  index: validatedFlowcharts[i].index || 0,
+                  name: validatedFlowcharts[i].name || `Flowchart ${i+1}`,
+                  buffer: null,
+                  error: "Buffer too small to be a valid image"
+                });
+              }
+            } catch (bufferError) {
+              console.error(`Error processing flowchart #${i+1} buffer:`, bufferError);
+              processedFlowcharts.push({
+                index: validatedFlowcharts[i].index || 0,
+                name: validatedFlowcharts[i].name || 'Flowchart',
+                buffer: null,
+                error: `Invalid image data: ${bufferError.message}`
+              });
+            }
+          } else if (validatedFlowcharts[i] && validatedFlowcharts[i].error) {
+            console.log(`Flowchart #${i+1}: Has error, no image data`);
             processedFlowcharts.push({
-              index: flowchart.index,
-              name: flowchart.name,
-              buffer: Buffer.from(flowchart.image, 'base64'),
-              error: null
-            });
-          } else if (flowchart.error) {
-            processedFlowcharts.push({
-              index: flowchart.index,
-              name: flowchart.name,
+              index: validatedFlowcharts[i].index || 0,
+              name: validatedFlowcharts[i].name || 'Flowchart',
               buffer: null,
-              error: flowchart.error
+              error: validatedFlowcharts[i].error
             });
           }
         }
       }
       
-      // Generate document structure for better PDF formatting
-      const docStructure = await documentGenerationFlow({
-        userInput: beautifiedOutput.userInput || 'User input',
-        beautifiedOutput: beautifiedOutput,
-        diagramCount: processedDiagrams.filter(d => !d.error && d.buffer).length,
-        flowchartCount: processedFlowcharts.filter(f => !f.error && f.buffer).length
-      }).catch(err => {
-        console.error("Error generating document structure:", err);
-        return null;
-      });
+      // Log processed visuals
+      console.log(`Successfully processed ${processedDiagrams.filter(d => d.buffer).length}/${processedDiagrams.length} diagrams`);
+      console.log(`Successfully processed ${processedFlowcharts.filter(f => f.buffer).length}/${processedFlowcharts.length} flowcharts`);
+      
+      // Create arrays with diagrams/prompts and flowcharts/code mapping
+      const diagramsWithPrompts = [];
+      if (Array.isArray(validatedDiagrams) && validatedDiagrams.length > 0) {
+        for (let i = 0; i < validatedDiagrams.length; i++) {
+          if (validatedDiagrams[i] && validatedDiagrams[i].image) {
+            const conceptIndex = validatedDiagrams[i].index || 0;
+            
+            // Access safely with null checks
+            const conceptsDiagram = validatedBeautifiedOutput.fullOutput?.concepts_diagram || [];
+            const diagramPrompts = validatedBeautifiedOutput.fullOutput?.diagram_prompts || [];
+            
+            diagramsWithPrompts.push({
+              index: i,
+              concept: conceptsDiagram[conceptIndex] || `Concept ${i+1}`,
+              prompt: diagramPrompts[conceptIndex] || ''
+            });
+          }
+        }
+      }
+      
+      const flowchartsWithCode = [];
+      if (Array.isArray(validatedFlowcharts) && validatedFlowcharts.length > 0) {
+        for (let i = 0; i < validatedFlowcharts.length; i++) {
+          if (validatedFlowcharts[i] && validatedFlowcharts[i].image) {
+            const conceptIndex = validatedFlowcharts[i].index || 0;
+            
+            // Access safely with null checks
+            const flowchartsPrompt = validatedBeautifiedOutput.fullOutput?.flowcharts_prompt || [];
+            
+            flowchartsWithCode.push({
+              index: i,
+              name: validatedFlowcharts[i].name || `Flowchart ${i+1}`,
+              code: flowchartsPrompt[conceptIndex] || ''
+            });
+          }
+        }
+      }
+      
+      // Generate document structure for better PDF formatting with error handling
+      try {
+        var docStructure = await documentGenerationFlow({
+          userInput: validatedBeautifiedOutput.userInput || 'User input',
+          beautifiedOutput: validatedBeautifiedOutput.fullOutput || validatedBeautifiedOutput,
+          diagramCount: processedDiagrams.filter(d => d && !d.error && d.buffer).length,
+          flowchartCount: processedFlowcharts.filter(f => f && !f.error && f.buffer).length,
+          diagramsWithPrompts: diagramsWithPrompts,
+          flowchartsWithCode: flowchartsWithCode
+        });
+        
+        // Sanitize docStructure content to prevent encoding issues
+        if (docStructure && docStructure.sections) {
+          docStructure.sections = docStructure.sections.map(section => {
+            // Safely handle content string - replace problematic newlines
+            if (section.content) {
+              section.content = section.content
+                .replace(/\r\n/g, '\n')  // Normalize all newlines
+                .replace(/\n{3,}/g, '\n\n');  // Remove excessive newlines
+            }
+            
+            // Safely handle captions
+            if (section.imageCaption) {
+              section.imageCaption = section.imageCaption.replace(/[\r\n]+/g, ' ');
+            }
+            
+            return section;
+          });
+        }
+      } catch (structureError) {
+        console.error("Error generating document structure:", structureError);
+        docStructure = null;
+      }
       
       // Generate PDF using the document structure and visual elements
       const pdfBuffer = await generateDocumentFromContent(
-        beautifiedOutput, 
+        validatedBeautifiedOutput, 
         processedDiagrams, 
         processedFlowcharts,
         docStructure

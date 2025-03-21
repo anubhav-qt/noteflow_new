@@ -101,30 +101,49 @@ const noteBeautifierFlow = ai.defineFlow(
       4. Concepts that would benefit from flowcharts (leave empty if none)
       5. Mermaid.js code to create those flowcharts (leave empty if none)`;
 
-      // Modified system prompt for flowcharts
-      systemPrompt += `\n\nIMPORTANT INSTRUCTIONS FOR FLOWCHARTS: When generating flowchart code, provide 100% VALID mermaid.js code that can be directly used, not prompts. Always start with 'flowchart TD' or another valid diagram type. Ensure the syntax is correct and can be rendered by a mermaid parser. 
+      // Modified system prompt for flowcharts with much stricter instructions
+      systemPrompt += `\n\nCRITICAL INSTRUCTIONS FOR FLOWCHARTS: You MUST generate 100% valid mermaid.js syntax code. This is NOT a prompt - this is actual code that will be rendered by a mermaid parser. Follow these strict rules:
 
-CRITICAL SYNTAX RULES:
-1. For node text containing parentheses or special characters, use double quotes: A[\"Text with (parentheses)\"] NOT A[Text with (parentheses)]
-2. Keep node names simple (like A, B, C) and put descriptive text in the node labels
-3. Avoid spaces in node names
-4. Each line must end with semicolon (;)
-5. Escape special characters properly
-6. Test every flowchart in your mind line by line to verify correct syntax
+1. ALWAYS start with 'flowchart TD' (top-down) or 'flowchart LR' (left-right)
+2. EVERY node definition MUST use simple IDs like A, B, C, node1, node2 - NO spaces or special characters in IDs
+3. For node text that contains ANY special characters, ALWAYS use double quotes and square brackets: A["Text with (special) characters"]
+4. For decision nodes with conditions, ALWAYS use double quotes and curly braces: A{"Decision?"}
+5. EVERY connection MUST end with a semicolon (;)
+6. NEVER use style declarations unless you know the exact syntax
+7. Use --> for arrows, --- for lines, and -.-> for dotted lines
+8. NEVER use Unicode characters - only ASCII 
+9. NEVER include 'mermaid' at the start or triple backticks in your code
+10. Limit flowcharts to 15 nodes or fewer for readability
 
-Example of CORRECT syntax:
+EXAMPLE OF PERFECT SYNTAX:
 \`\`\`
 flowchart TD
-    A[\"Start: Initialize Matrices (U, V)\"] --> B[\"Fix Matrix U\"];
-    B --> C[\"Optimize Matrix V\"];
-    C --> D[\"Fix Matrix V\"];
-    D --> E[\"Optimize Matrix U\"];
-    E --> F{\"Check Convergence\"};
-    F -- Yes --> G[\"End: Complete\"];
-    F -- No --> B;
+    Start["Begin Process"] --> A["Initialize Data"];
+    A --> B{"Valid Input?"};
+    B -->|Yes| C["Process Data"];
+    B -->|No| D["Show Error"];
+    C --> E["Save Results"];
+    D --> End["Exit Process"];
+    E --> End;
 \`\`\`
 
-Keep flowcharts simple and focused. Do not create flowcharts with excessive nodes or complexity. Always verify the syntax is 100% correct before returning.`;
+BAD SYNTAX (DO NOT USE):
+\`\`\`
+flowchart TD
+    Start(Begin Process) --> A(Initialize Data)
+    A --> B{Valid Input?}
+    B -- Yes --> C(Process Data)  // WRONG: Missing semicolons
+    B -- No --> D(Show Error)     // WRONG: Missing quotations around text with spaces
+    C --> E[Save Results]
+    D & E --> End(Exit Process)   // WRONG: Incorrect node linkage
+\`\`\`
+
+Remember, this code will be directly executed without modification, so perfect syntax is REQUIRED. Test your code mentally node-by-node, connection-by-connection to ensure validity.
+
+For complex concepts, it's better to create simpler, valid flowcharts than complex ones with syntax errors. When in doubt, simplify.`;
+
+// Modified system prompt for diagram prompts to specify square sizing
+systemPrompt += `\n\nFor diagram prompts: Create clear, educational diagrams with a SQUARE aspect ratio (1:1). The diagrams should be designed to fit beside text in a document, taking up approximately half of the page width. Make prompts detailed enough to generate high-quality, informative visualizations that can stand on their own with a short caption.`;
       
       logAI('BEAUTIFIER_PROMPT', {
         flowId,
@@ -251,14 +270,14 @@ const conversationFlow = ai.defineFlow(
   }
 );
 
-// Add new schema for document generation
+// Update schema for document generation to include diagram prompts and flowchart code
 const DocumentGenerationSchema = z.object({
   title: z.string().describe("Title for the PDF document"),
   sections: z.array(z.object({
     heading: z.string().optional().describe("Section heading"),
     content: z.string().describe("Section content text"),
     includeImage: z.boolean().describe("Whether to include an image in this section"),
-    imageCaption: z.string().optional().describe("Caption for the image if included")
+    imageCaption: z.string().optional().describe("Caption for the image if included"),
   })).describe("Sections of the document with content and image instructions")
 });
 
@@ -276,11 +295,21 @@ const documentGenerationFlow = ai.defineFlow(
         flowcharts_prompt: z.array(z.string())
       }),
       diagramCount: z.number(),
-      flowchartCount: z.number()
+      flowchartCount: z.number(),
+      diagramsWithPrompts: z.array(z.object({
+        index: z.number(),
+        concept: z.string(),
+        prompt: z.string()
+      })).optional(),
+      flowchartsWithCode: z.array(z.object({
+        index: z.number(),
+        name: z.string(),
+        code: z.string()
+      })).optional()
     }),
     outputSchema: DocumentGenerationSchema,
   },
-  async ({ userInput, beautifiedOutput, diagramCount, flowchartCount }) => {
+  async ({ userInput, beautifiedOutput, diagramCount, flowchartCount, diagramsWithPrompts, flowchartsWithCode }) => {
     try {
       const flowId = `flow-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       logAI('DOCUMENT_FLOW_START', {
@@ -293,46 +322,101 @@ const documentGenerationFlow = ai.defineFlow(
       const startTime = Date.now();
       
       // Prepare system prompt for document generation
-      const systemPrompt = `You are an expert document designer creating educational content with a focus on clarity and visual organization. 
-      Your task is to create a structured document that effectively integrates text explanations with visual elements like diagrams and flowcharts.
+      const systemPrompt = `You are an expert educational content creator designing professional-looking documents with perfect integration of text and visuals.
+      
+      Your task is to create a comprehensive and educational document that effectively integrates explanatory text with visual elements like diagrams and flowcharts.
 
-      Use these guidelines when designing the document structure:
+      IMPORTANT DOCUMENT STYLE GUIDELINES:
       1. Create a clear, descriptive title that reflects the document content
-      2. Organize content into logical sections with clear headings
-      3. For each section, provide educational text that explains concepts clearly
-      4. Indicate where diagrams or flowcharts should be placed in the document
-      5. Create appropriate captions for each visual element
-      6. Ensure the document flows naturally and builds understanding progressively
-      7. Use a professional, educational tone throughout`;
+      2. Organize content into logical sections with concise headings
+      3. For sections with diagrams, arrange content so text appears BESIDE the image (not just before/after)
+      4. For sections with flowcharts, place explanatory text ABOVE the flowchart
+      5. Every visual element must have a 1-2 line caption that clearly explains what it shows
+      6. Do NOT include a "Summary" section or any introduction mentioning the source format (video/audio/image)
+      7. Write as comprehensive, detailed educational notes about the topic - not a summary
+      8. Maintain a professional, educational tone throughout
+      9. Keep content factual and avoid phrases like "this video shows" or "in this image"`;
 
-      // Build the user prompt with details about available visuals
+      // Build the user prompt with details about available visuals and their contexts
       let userPrompt = `Based on this user input: "${userInput.substring(0, 200)}${userInput.length > 200 ? '...' : ''}"
-
-      I've already generated these beautiful notes:
       
-      Summary:
+      I've already generated content about this topic. Your task is to organize it into a well-structured educational document.
+      
+      Key information:
       ${beautifiedOutput.summary}
-      
       `;
       
-      // Add information about available diagrams
-      if (diagramCount > 0) {
+      // Add information about available diagrams with their prompts
+      if (diagramCount > 0 && diagramsWithPrompts?.length > 0) {
+        userPrompt += `\nI have ${diagramCount} diagram(s) for these concepts:\n`;
+        diagramsWithPrompts.forEach((diagram, i) => {
+          userPrompt += `${i+1}. Concept: ${diagram.concept}\n`;
+          userPrompt += `   Generation prompt: ${diagram.prompt}\n\n`;
+        });
+      } else if (diagramCount > 0) {
         userPrompt += `\nI have ${diagramCount} diagram(s) for these concepts:\n`;
         beautifiedOutput.concepts_diagram.slice(0, diagramCount).forEach((concept, i) => {
           userPrompt += `${i+1}. ${concept}\n`;
+          if (beautifiedOutput.diagram_prompts[i]) {
+            userPrompt += `   Generation prompt: ${beautifiedOutput.diagram_prompts[i]}\n\n`;
+          }
         });
       }
       
-      // Add information about available flowcharts
-      if (flowchartCount > 0) {
+      // Add information about available flowcharts with their code
+      if (flowchartCount > 0 && flowchartsWithCode?.length > 0) {
+        userPrompt += `\nI have ${flowchartCount} flowchart(s) for these concepts:\n`;
+        flowchartsWithCode.forEach((flowchart, i) => {
+          userPrompt += `${i+1}. Concept: ${flowchart.name}\n`;
+          userPrompt += `   Flowchart code: ${flowchart.code.substring(0, 150)}...\n`;
+          
+          // Add indication if flowchart might be a placeholder due to API limits
+          if (flowchart.isPlaceholder || flowchart.error) {
+            userPrompt += `   Note: This flowchart may be displayed as a simplified placeholder due to rendering limitations.\n`;
+          }
+          
+          userPrompt += `\n`;
+        });
+      } else if (flowchartCount > 0) {
         userPrompt += `\nI have ${flowchartCount} flowchart(s) for these concepts:\n`;
         beautifiedOutput.concepts_flowcharts.slice(0, flowchartCount).forEach((concept, i) => {
           userPrompt += `${i+1}. ${concept}\n`;
+          if (beautifiedOutput.flowcharts_prompt[i]) {
+            userPrompt += `   Flowchart code: ${beautifiedOutput.flowcharts_prompt[i].substring(0, 150)}...\n`;
+            
+            // Check if flowchart code suggests it might be problematic
+            const flowchartCode = beautifiedOutput.flowcharts_prompt[i] || '';
+            if (flowchartCode.includes('ERROR') || flowchartCode.includes('PLACEHOLDER') || 
+                flowchartCode.length < 50) {
+              userPrompt += `   Note: This flowchart may be displayed as a simplified placeholder.\n`;
+            }
+            
+            userPrompt += `\n`;
+          }
         });
       }
       
-      userPrompt += `\nPlease create a document structure that integrates these elements into a cohesive educational document. The output will be used to generate a PDF.`;
+      userPrompt += `\nIMPORTANT LAYOUT INSTRUCTIONS:
+      - For diagram sections: Place the image on one half of the page with explanatory text beside it. Images are square (1:1 aspect ratio). Add a 1-2 line caption below.
+      - For flowchart sections: Place explanatory text above the flowchart. Flowcharts should be about 70% of page width. Add a 1-2 line caption below.
+      - The document should be comprehensive and educational - NOT a summary.
+      - DO NOT mention the source format (video/audio/image) or use phrases like "this video shows" or "in this image".
+      - For sections with placeholder images, focus more on detailed textual explanations to compensate.
       
+      CRITICAL VISUAL ASSIGNMENT INSTRUCTIONS:
+      1. When you create a section that should include a diagram or flowchart, ENSURE that the section heading PRECISELY matches the visual's concept name
+      2. For example, if you have a flowchart about "Attention Mechanism Process", the section should be titled exactly "Attention Mechanism Process"
+      3. For flowcharts, always include the exact flowchart name in your section heading, verbatim with the same wording
+      4. Make section headings descriptive but concise - no more than 4-5 words
+      5. Each visual must be assigned to exactly one section 
+      6. Never request more visuals than are available
+      7. Every visual MUST be assigned to a section - don't leave any diagrams or flowcharts unused
+      8. Create sections in a logical order that builds understanding progressively
+      9. For complex technical topics, start with simpler concepts before advanced ones
+
+FLOWCHART ASSIGNMENT IS CRITICAL: For each flowchart, create a section with the EXACT title matching the flowchart name. For example, if you have a flowchart called "Masking Process During Training", create a section titled exactly "Masking Process During Training".
+`;
+
       logAI('DOCUMENT_PROMPT', {
         flowId,
         system: systemPrompt.substring(0, 200) + (systemPrompt.length > 200 ? '...' : ''),

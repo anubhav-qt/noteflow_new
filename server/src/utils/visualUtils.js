@@ -114,8 +114,8 @@ async function generateDiagram(prompt) {
           parameters: {
             guidance_scale: 7.5,          // Higher guidance scale for better text clarity
             num_inference_steps: 50,
-            width: 1024,
-            height: 768,
+            width: 1024,                  // Square aspect ratio (1:1)
+            height: 1024,                 // Square aspect ratio (1:1)
             seed: Math.floor(Math.random() * 2147483647) // Random seed for variety
           }
         }),
@@ -132,12 +132,14 @@ async function generateDiagram(prompt) {
             (errorData.error && 
              (errorData.error.includes("rate") || 
               errorData.error.includes("limit")))) {
-          return null; // Return null instead of retrying
+          console.warn("API rate limit reached, generating placeholder image");
+          return createPlaceholderImage(prompt);
         }
         
         // Special handling for model loading response
         if (response.status === 503 && errorData.error && errorData.error.includes("loading")) {
-          return null; // Return null instead of retrying
+          console.warn("Model is loading, generating placeholder image");
+          return createPlaceholderImage(prompt);
         }
         
         throw new Error(errorData.error || `API error: ${response.status} ${response.statusText}`);
@@ -151,7 +153,102 @@ async function generateDiagram(prompt) {
     return Buffer.from(buffer);
   } catch (error) {
     console.error(`Error in generateDiagram: ${error.message}`);
-    return null;
+    console.warn("Generating placeholder image due to error");
+    return createPlaceholderImage(prompt);
+  }
+}
+
+/**
+ * Creates a placeholder pink image with the prompt text
+ * @param {string} prompt - The original prompt for the image
+ * @returns {Buffer} - Image buffer of the placeholder
+ */
+function createPlaceholderImage(prompt) {
+  try {
+    // Create a canvas with the same dimensions as the expected image
+    const width = 1024;
+    const height = 1024;
+    const canvas = createCanvas(width, height);
+    const ctx = canvas.getContext('2d');
+    
+    // Fill with pink background
+    ctx.fillStyle = '#ffccee';
+    ctx.fillRect(0, 0, width, height);
+    
+    // Add a border
+    ctx.strokeStyle = '#ff66aa';
+    ctx.lineWidth = 20;
+    ctx.strokeRect(10, 10, width - 20, height - 20);
+    
+    // Add heading text
+    ctx.fillStyle = '#880044';
+    ctx.font = 'bold 40px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Image Generation Limited', width / 2, height / 4);
+    
+    // Add placeholder text about rate limits
+    ctx.fillStyle = '#550033';
+    ctx.font = '30px Arial';
+    ctx.fillText('API rate limit reached', width / 2, height / 4 + 60);
+    
+    // Display a portion of the original prompt
+    const maxPromptLength = 200;
+    const promptPreview = prompt.length > maxPromptLength 
+      ? prompt.substring(0, maxPromptLength) + "..."
+      : prompt;
+    
+    ctx.fillStyle = '#000000';
+    ctx.font = '24px Arial';
+    ctx.fillText('Original Prompt:', width / 2, height / 2);
+    
+    // Wrap the prompt text
+    const words = promptPreview.split(' ');
+    let line = '';
+    let y = height / 2 + 40;
+    const lineHeight = 30;
+    const maxWidth = width * 0.8;
+    
+    for (let i = 0; i < words.length; i++) {
+      const testLine = line + words[i] + ' ';
+      const metrics = ctx.measureText(testLine);
+      
+      if (metrics.width > maxWidth) {
+        ctx.fillText(line, width / 2, y);
+        line = words[i] + ' ';
+        y += lineHeight;
+        
+        // Prevent text from going off the canvas
+        if (y > height - 50) {
+          ctx.fillText('...', width / 2, y);
+          break;
+        }
+      } else {
+        line = testLine;
+      }
+    }
+    
+    // Draw the last line
+    if (line.trim() !== '') {
+      ctx.fillText(line, width / 2, y);
+    }
+    
+    // Convert canvas to PNG buffer
+    return canvas.toBuffer('image/png');
+  } catch (error) {
+    console.error('Error creating placeholder image:', error);
+    
+    // If even this fails, create an ultra-simple fallback
+    try {
+      const canvas = createCanvas(800, 800);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffccee';  // Pink
+      ctx.fillRect(0, 0, 800, 800);
+      return canvas.toBuffer('image/png');
+    } catch (fallbackError) {
+      console.error('Critical error creating fallback image:', fallbackError);
+      // At this point we have to return null, but our PDF generator should handle that
+      return null;
+    }
   }
 }
 
@@ -178,6 +275,22 @@ async function generateFlowchart(mermaidCode, conceptName) {
       fixedMermaidCode = 'flowchart TD\n' + fixedMermaidCode;
     }
     
+    // Fix missing semicolons
+    const lines = fixedMermaidCode.split('\n');
+    const fixedLines = lines.map(line => {
+      // If line contains arrow but doesn't end with semicolon, add it
+      if ((line.includes('-->') || line.includes('---')) && 
+          !line.trim().endsWith(';') && 
+          !line.trim().endsWith('subgraph') &&
+          !line.includes('end')) {
+        return line + ';';
+      }
+      return line;
+    });
+    fixedMermaidCode = fixedLines.join('\n');
+    
+    console.log(`Fixed mermaid code for "${conceptName}":`, fixedMermaidCode.substring(0, 100) + '...');
+    
     // Save to file
     await fs.writeFile(mmdFilePath, fixedMermaidCode, 'utf8');
     
@@ -193,7 +306,7 @@ async function generateFlowchart(mermaidCode, conceptName) {
           await mmdc.run({
             input: mmdFilePath,
             output: pngFilePath,
-            backgroundColor: 'transparent',
+            backgroundColor: 'white', // Change to white for better visibility
             puppeteerConfig: {
               args: ['--no-sandbox', '--disable-setuid-sandbox']
             }
@@ -205,13 +318,13 @@ async function generateFlowchart(mermaidCode, conceptName) {
           let command;
           if (mermaidCliPath === 'mmdc') {
             // Direct command (in PATH)
-            command = `mmdc -i "${mmdFilePath}" -o "${pngFilePath}" -b transparent`;
+            command = `mmdc -i "${mmdFilePath}" -o "${pngFilePath}" -b white`; // Change to white background
           } else if (mermaidCliPath.endsWith('.js')) {
             // JavaScript file - use Node to execute
-            command = `node "${mermaidCliPath}" -i "${mmdFilePath}" -o "${pngFilePath}" -b transparent`;
+            command = `node "${mermaidCliPath}" -i "${mmdFilePath}" -o "${pngFilePath}" -b white`;
           } else {
             // Direct executable
-            command = `"${mermaidCliPath}" -i "${mmdFilePath}" -o "${pngFilePath}" -b transparent`;
+            command = `"${mermaidCliPath}" -i "${mmdFilePath}" -o "${pngFilePath}" -b white`;
           }
           
           console.log(`Executing command: ${command}`);
@@ -220,17 +333,29 @@ async function generateFlowchart(mermaidCode, conceptName) {
           throw new Error('No mermaid-cli execution method available');
         }
         
-        // Check if the PNG was generated and has content
+        // Verify the generated PNG exists and has content
         const fileStats = await fs.stat(pngFilePath);
         console.log(`Generated PNG file size: ${fileStats.size} bytes`);
         
-        if (fileStats.size === 0) {
-          throw new Error("Generated PNG is empty");
+        if (fileStats.size < 1000) {
+          console.warn('Generated PNG is too small, likely not a valid image');
+          throw new Error("Generated PNG is too small to be a valid image");
         }
         
         // Read the generated PNG file
         const buffer = await fs.readFile(pngFilePath);
-        console.log(`Read PNG file: ${buffer.length} bytes`);
+        console.log(`Successfully read PNG file: ${buffer.length} bytes`);
+        
+        // Save a copy of the PNG for debugging
+        try {
+          const debugDir = path.join(os.tmpdir(), 'noteflow-debug');
+          await fs.mkdir(debugDir, { recursive: true });
+          const debugFilePath = path.join(debugDir, `${sanitizedName}_${uniqueId}.png`);
+          await fs.writeFile(debugFilePath, buffer);
+          console.log(`Debug copy saved to: ${debugFilePath}`);
+        } catch (debugError) {
+          console.warn('Failed to save debug copy:', debugError.message);
+        }
         
         // Clean up temp directory
         await fs.rm(tempDir, { recursive: true, force: true })
@@ -249,68 +374,70 @@ async function generateFlowchart(mermaidCode, conceptName) {
         throw cliError;
       }
     } else {
-      throw new Error('Mermaid CLI not available');
+      throw new Error('Mermaid CLI not available, using fallback renderer');
     }
   } catch (error) {
-    console.log(`Using fallback rendering for flowchart "${conceptName}"`, error);
-    
-    // ...existing fallback code...
+    console.log(`Using fallback rendering for flowchart "${conceptName}": ${error.message}`);
     return generateFallbackFlowchart(mermaidCode, conceptName);
   }
 }
 
-// Separate function for the fallback renderer to keep the code cleaner
+// Improve the fallback flowchart generator to make it clearer this is a fallback
 function generateFallbackFlowchart(mermaidCode, conceptName) {
   try {
-    // Create a simple image with the mermaid code as text
-    const canvas = createCanvas(800, 600);
+    // Create a canvas with better dimensions (16:9 aspect ratio)
+    const canvas = createCanvas(1024, 768);
     const ctx = canvas.getContext('2d');
     
     // Fill background
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, 800, 600);
+    ctx.fillRect(0, 0, 1024, 768);
     
-    // Add title and border
+    // Add title and border - make it more prominent
     ctx.fillStyle = '#333333';
+    ctx.font = 'bold 24px Arial';
+    ctx.fillText(`Flowchart: ${conceptName}`, 40, 40);
+    
+    // Add a notice about fallback mode
+    ctx.fillStyle = '#cc0000';
     ctx.font = 'bold 18px Arial';
-    ctx.fillText(`Flowchart: ${conceptName}`, 20, 30);
+    ctx.fillText('Flowchart visualization unavailable - showing code representation', 40, 70);
     
     // Draw a border
     ctx.strokeStyle = '#9999cc';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(10, 10, 780, 580);
+    ctx.lineWidth = 4;
+    ctx.strokeRect(20, 20, 984, 728);
     
-    // Add explanation
-    ctx.fillStyle = '#555555';
-    ctx.font = '14px Arial';
-    ctx.fillText(`This is a text representation of the flowchart code:`, 20, 60);
-    
-    // Draw the mermaid code as text
-    ctx.fillStyle = '#333333';
-    ctx.font = '12px Monospace';
+    // Draw the mermaid code as text with better formatting
+    ctx.fillStyle = '#000000';
+    ctx.font = '16px Courier New';
     const lines = mermaidCode.split('\n');
-    const maxLines = Math.min(lines.length, 25); // Limit to 25 lines
+    const maxLines = Math.min(lines.length, 30); // Limit to 30 lines
     
     for (let i = 0; i < maxLines; i++) {
-      ctx.fillText(lines[i].substring(0, 70), 30, 90 + i * 18);
+      ctx.fillText(lines[i].substring(0, 90), 40, 110 + i * 20);
     }
     
     if (lines.length > maxLines) {
-      ctx.fillText('...', 30, 90 + maxLines * 18);
+      ctx.fillText('...', 40, 110 + maxLines * 20);
     }
     
+    console.log(`Generated fallback flowchart image for "${conceptName}"`);
     return canvas.toBuffer('image/png');
   } catch (canvasError) {
     console.error('Error in fallback flowchart generation:', canvasError);
     // If even the fallback fails, return a very basic PNG
-    const canvas = createCanvas(400, 200);
+    const canvas = createCanvas(800, 400);
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, 400, 200);
-    ctx.fillStyle = '#ff0000';
-    ctx.font = 'bold 14px Arial';
-    ctx.fillText('Error generating flowchart', 20, 50);
-    ctx.fillText(conceptName, 20, 80);
+    ctx.fillRect(0, 0, 800, 400);
+    ctx.fillStyle = '#cc0000';
+    ctx.font = 'bold 24px Arial';
+    ctx.fillText('Error generating flowchart', 40, 80);
+    ctx.fillStyle = '#000000';
+    ctx.font = '18px Arial';
+    ctx.fillText(conceptName, 40, 120);
+    ctx.fillText('Flowchart renderer failed completely', 40, 160);
     return canvas.toBuffer('image/png');
   }
 }
@@ -323,28 +450,36 @@ async function generateAllDiagrams(diagramPrompts) {
   
   for (let i = 0; i < diagramPrompts.length; i++) {
     try {
+      console.log(`Generating diagram #${i+1} with prompt: "${diagramPrompts[i].substring(0, 50)}..."`);
       const buffer = await generateDiagram(diagramPrompts[i]);
       
-      // If buffer is null (API failed), add an error result
+      // If buffer is null (which should be rare now), add an error result
       if (!buffer) {
+        console.error(`Failed to generate diagram #${i+1} - null buffer returned`);
         results.push({
           index: i,
           buffer: null,
-          error: "API rate limited or temporarily unavailable"
+          error: "Failed to generate even a placeholder image"
         });
         continue;
       }
       
+      console.log(`Successfully generated diagram #${i+1} - buffer size: ${buffer.length} bytes`);
       results.push({
         index: i,
         buffer: buffer,
+        prompt: diagramPrompts[i],
         error: null
       });
     } catch (error) {
-      console.error(`Error generating diagram ${i+1}:`, error);
+      console.error(`Error generating diagram #${i+1}:`, error);
+      // Try to create a placeholder directly here as well
+      const placeholderBuffer = createPlaceholderImage(diagramPrompts[i]);
+      
       results.push({
         index: i,
-        buffer: null,
+        buffer: placeholderBuffer,
+        prompt: diagramPrompts[i],
         error: error.message
       });
     }
@@ -362,10 +497,13 @@ async function generateAllFlowcharts(flowchartCodes, conceptNames) {
   for (let i = 0; i < flowchartCodes.length; i++) {
     try {
       const conceptName = conceptNames[i] || `Flowchart ${i+1}`;
+      console.log(`Generating flowchart #${i+1} "${conceptName}" with code length: ${flowchartCodes[i].length} chars`);
+      
       const buffer = await generateFlowchart(flowchartCodes[i], conceptName);
       
       // If buffer is null (generation failed), add error
       if (!buffer) {
+        console.error(`Failed to generate flowchart #${i+1} "${conceptName}" - null buffer returned`);
         results.push({
           index: i,
           name: conceptName,
@@ -375,6 +513,7 @@ async function generateAllFlowcharts(flowchartCodes, conceptNames) {
         continue;
       }
       
+      console.log(`Successfully generated flowchart #${i+1} "${conceptName}" - buffer size: ${buffer.length} bytes`);
       results.push({
         index: i,
         name: conceptName,
@@ -382,7 +521,7 @@ async function generateAllFlowcharts(flowchartCodes, conceptNames) {
         error: null
       });
     } catch (error) {
-      console.error(`Error generating flowchart ${i+1}:`, error);
+      console.error(`Error generating flowchart #${i+1}:`, error);
       results.push({
         index: i,
         name: conceptNames[i] || `Flowchart ${i+1}`,
