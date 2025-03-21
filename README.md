@@ -59,5 +59,5 @@ npm run server
 - React (Frontend)
 - Tailwind CSS (Styling)
 - Express (Backend)
-- Firebase (Authentication, Database, Storage)
+- Firebase (Authentication, Database, Storage, Genkit)
 - PDF generation library: PDF-lib.
