@@ -125,7 +125,8 @@ app.post('/api/process', upload.single('file'), async (req, res) => {
       inputType,
       inputContent,
       status: 'processing',
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      title: fileName || `Note ${new Date().toLocaleString()}`
     });
     
     // Process asynchronously

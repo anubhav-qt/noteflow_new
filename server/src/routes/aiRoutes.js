@@ -373,9 +373,11 @@ router.post('/generate-pdf', async (req, res) => {
       if (pdfBuffer) {
         console.log(`PDF generated successfully: ${pdfBuffer.length} bytes`);
         
-        // Return the PDF data
+        // Return the PDF data along with the document title from docStructure
         res.json({
-          pdf: pdfBuffer.toString('base64')
+          pdf: pdfBuffer.toString('base64'),
+          // Include the document title from docStructure if available
+          documentTitle: docStructure?.title || validatedBeautifiedOutput?.fullOutput?.title || 'NoteFlow Document'
         });
       } else {
         console.error("PDF generation failed - no buffer returned");

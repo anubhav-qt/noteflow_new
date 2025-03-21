@@ -49,9 +49,12 @@ async function generatePDF(content) {
       // Use fallback font if the provided font is undefined
       const safeFont = font || bodyFont;
       
+      // Ensure text is a string
+      const safeText = String(text || '');
+      
       // Sanitize text to handle problematic characters and ensure newlines are processed correctly
       // Replace any standalone \n with space+newline for better detection
-      let sanitizedText = text.replace(/([^\r])\n/g, '$1 \n');
+      let sanitizedText = safeText.replace(/([^\r])\n/g, '$1 \n');
       
       // Replace any other characters that might cause encoding issues
       // This replacement uses standard ASCII characters that should be safe in any encoding
@@ -84,7 +87,18 @@ async function generatePDF(content) {
           try {
             // Try to measure the width - if this fails due to encoding issues, replace problem chars
             const testLine = line + words[i] + ' ';
-            const lineWidth = safeFont.widthOfTextAtSize(testLine, size);
+            
+            // IMPORTANT FIX: Remove all problematic characters before measuring width
+            const sanitizedTestLine = testLine.replace(/[\r\n\u0080-\uFFFF]/g, ' ');
+            
+            let lineWidth;
+            try {
+              lineWidth = safeFont.widthOfTextAtSize(sanitizedTestLine, size);
+            } catch (measureError) {
+              // If measurement still fails, use a very simple character-based approximation
+              lineWidth = sanitizedTestLine.length * (size * 0.6);
+              console.warn('Using character approximation for width measurement');
+            }
             
             if (lineWidth > maxWidth) {
               // Add current line and start a new one
@@ -389,8 +403,17 @@ async function generatePDF(content) {
               
               // First phase: Render text beside the image until we reach image bottom
               while (i < words.length) {
-                const testLine = line + words[i] + ' ';
-                const lineWidth = bodyFont.widthOfTextAtSize(testLine, 12);
+                // IMPORTANT FIX: Remove potential problematic characters before text measurement
+                const safeWord = words[i].replace(/[\r\n\u0080-\uFFFF]/g, ' ');
+                const testLine = (line + safeWord + ' ').replace(/[\r\n\u0080-\uFFFF]/g, ' ');
+                
+                let lineWidth;
+                try {
+                  lineWidth = bodyFont.widthOfTextAtSize(testLine, 12);
+                } catch (measureError) {
+                  // Fallback to character-based approximation
+                  lineWidth = testLine.length * 7; // Rough approximation
+                }
                 
                 if (lineWidth > textWidth || words[i].includes('\n')) {
                   // Add current line
@@ -946,6 +969,79 @@ async function generateDocumentFromContent(noteData, diagrams = [], flowcharts =
     }
   } catch (error) {
     console.error('Error generating document from content:', error);
+    
+    // If we get a specific encoding issue with newlines, attempt recovery
+    if (error.message && (
+        error.message.includes("WinAnsi cannot encode") || 
+        error.message.includes("0x000a")
+    )) {
+      console.log("Detected text encoding issue, attempting recovery with simplified content");
+      
+      try {
+        // Create simplified content that avoids complex text handling
+        const simplifiedContent = {
+          title: "PDF Document (Simplified Version)",
+          sections: [
+            {
+              heading: "Note Summary",
+              text: "The original note content contained characters that couldn't be properly encoded. This is a simplified version.",
+              layout: "text-only"
+            }
+          ]
+        };
+        
+        // Add a basic summary if available
+        const summary = noteData?.fullOutput?.summary || noteData?.summary;
+        if (summary) {
+          const safeSummary = String(summary)
+            .replace(/[\r\n]+/g, ' ')  // Replace all newlines with spaces
+            .replace(/[^\x20-\x7E]/g, ' '); // Replace all non-ASCII chars
+            
+          simplifiedContent.sections.push({
+            heading: "Content Summary",
+            text: safeSummary,
+            layout: "text-only"
+          });
+        }
+        
+        // Try to include diagrams and flowcharts without text
+        if (diagrams && diagrams.length > 0) {
+          for (let i = 0; i < diagrams.length; i++) {
+            if (diagrams[i].buffer) {
+              simplifiedContent.sections.push({
+                heading: `Diagram ${i+1}`,
+                text: "",
+                imageBuffer: diagrams[i].buffer,
+                layout: "text-with-image",
+                imageCaption: `Diagram ${i+1}`,
+                isFlowchart: false
+              });
+            }
+          }
+        }
+        
+        if (flowcharts && flowcharts.length > 0) {
+          for (let i = 0; i < flowcharts.length; i++) {
+            if (flowcharts[i].buffer) {
+              simplifiedContent.sections.push({
+                heading: `Flowchart ${i+1}`,
+                text: "",
+                imageBuffer: flowcharts[i].buffer,
+                layout: "text-with-image",
+                imageCaption: flowcharts[i].name || `Flowchart ${i+1}`,
+                isFlowchart: true
+              });
+            }
+          }
+        }
+        
+        return await generatePDF(simplifiedContent);
+      } catch (recoveryError) {
+        console.error("Recovery attempt failed:", recoveryError);
+        // Fall through to basic error PDF
+      }
+    }
+    
     // Return a simple error PDF instead of failing completely
     try {
       // Sanitize error message to avoid encoding issues

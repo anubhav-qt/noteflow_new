@@ -5,6 +5,8 @@ import { FiSun, FiMoon, FiSend, FiPaperclip, FiImage, FiLogIn, FiUser, FiX, FiAr
 import { HiOutlineDocumentText, HiOutlinePencil, HiOutlineVolumeUp, HiOutlineBookOpen } from 'react-icons/hi';
 import { auth } from '../firebase/config';
 import { onAuthStateChanged } from 'firebase/auth';
+import { doc, setDoc, collection } from 'firebase/firestore';
+import { db } from '../firebase/config';
 import apiService from '../services/api';
 import NavBar from './NavBar';
 
@@ -209,10 +211,11 @@ function Home() {
               // Store the blob in a global variable to prevent garbage collection
               window._pdfBlob = pdfBlob;
               
-              // Update the result with the PDF URL
+              // Update the result with the PDF URL and document title
               setResult(prevResult => ({
                 ...prevResult,
                 pdfUrl: pdfUrl,
+                documentTitle: pdfResponse.data.documentTitle || 'NoteFlow Document',
                 visuals: visualsResponse.data // Store visuals but we won't display them
               }));
               
@@ -369,8 +372,14 @@ function Home() {
     // Reset height to auto to get the correct scrollHeight
     textarea.style.height = 'auto';
     
-    // Calculate new height with a minimum of 56px (approximately 1 line)
-    const newHeight = Math.min(textarea.scrollHeight, 120); // Max 3 lines (approx 120px)
+    // Calculate new height based on content
+    // Start with just one line height and expand as needed
+    const lineHeight = 24; // approximate line height in pixels
+    const minHeight = 24; // one line minimum
+    const maxHeight = lineHeight * 5; // max 5 lines (adjust as needed)
+    
+    // Get the actual content height and constrain between min and max
+    const newHeight = Math.min(Math.max(textarea.scrollHeight, minHeight), maxHeight);
     textarea.style.height = `${newHeight}px`;
   };
   
@@ -378,6 +387,73 @@ function Home() {
   useEffect(() => {
     adjustTextareaHeight();
   }, [inputText]);
+
+  // Add a new function to save PDF to Firestore
+  const savePdfToCloud = async (pdfUrl, pdfTitle) => {
+    if (!user) {
+      // If user is not logged in, prompt them to log in
+      setError("Please log in to save notes to the cloud");
+      return;
+    }
+    
+    try {
+      setProcessingStatus('Saving to cloud...');
+      
+      // Fetch the PDF data as an ArrayBuffer
+      const response = await fetch(pdfUrl);
+      const pdfBlob = await response.blob();
+      
+      // Convert blob to base64
+      const reader = new FileReader();
+      
+      // Use a promise to wait for the FileReader to complete
+      const base64Data = await new Promise((resolve, reject) => {
+        reader.onloadend = () => {
+          // Get the base64 string (remove the data URL prefix)
+          const base64String = reader.result.split(',')[1];
+          resolve(base64String);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(pdfBlob);
+      });
+      
+      // Generate a unique ID for the note
+      const noteId = Date.now().toString();
+      
+      // Determine PDF title, prioritize the document title from the API response
+      const noteName = result?.documentTitle || pdfTitle || `Note ${new Date().toLocaleDateString()}`;
+      
+      console.log(`Saving note to cloud: "${noteName}" for user ${user.uid}`);
+      
+      // Create the note document in Firestore with all required fields
+      await setDoc(doc(db, "notes", noteId), {
+        userId: user.uid,
+        title: noteName,
+        pdfData: base64Data,
+        // Ensure we create a proper timestamp that Firestore can query
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        // Add a type field to make filtering easier
+        type: "pdf",
+        // Add a status field to match the processedNotes collection
+        status: "completed"
+      });
+      
+      console.log(`Note saved successfully with ID: ${noteId}`);
+      
+      setProcessingStatus('Note saved to cloud!');
+      
+      // Clear status message after 3 seconds
+      setTimeout(() => {
+        setProcessingStatus('');
+      }, 3000);
+      
+    } catch (error) {
+      console.error("Error saving PDF to cloud:", error);
+      setError("Failed to save note to cloud: " + error.message);
+      setProcessingStatus('');
+    }
+  };
 
   return (
     <div className={`min-h-screen transition-colors duration-300 ${
@@ -499,16 +575,26 @@ function Home() {
                   } shadow-lg`}>
                     <h2 className="text-xl font-bold mb-4">PDF Document</h2>
                     
-                    {/* PDF action buttons */}
+                    {/* PDF action buttons - Updated with Save to Cloud */}
                     <div className="flex flex-col sm:flex-row gap-3 mb-5">
                       <a 
+                        onClick={(e) => {
+                          e.preventDefault();
+                          // Download locally AND save to cloud
+                          savePdfToCloud(result.pdfUrl, result.documentTitle || result.fullOutput?.title || "NoteFlow Document");
+                          // Then trigger the download
+                          const link = document.createElement('a');
+                          link.href = result.pdfUrl;
+                          link.download = `${result.documentTitle || "noteflow-document"}.pdf`;
+                          link.click();
+                        }}
                         href={result.pdfUrl} 
-                        download="noteflow-document.pdf"
+                        download={`${result.documentTitle || "noteflow-document"}.pdf`}
                         className={`inline-flex items-center justify-center px-4 py-2 rounded-md ${
                           isDarkMode 
                             ? 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700' // Gradient button
                             : 'bg-blue-600 hover:bg-blue-700'
-                        } text-white font-medium`}
+                        } text-white font-medium cursor-pointer`}
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
                           <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
@@ -530,6 +616,22 @@ function Home() {
                         </svg>
                         View PDF in Browser
                       </button>
+                      
+                      {/* New Save to Cloud button */}
+                      <button
+                        onClick={() => savePdfToCloud(result.pdfUrl, result.documentTitle || result.fullOutput?.title || "NoteFlow Document")}
+                        className={`inline-flex items-center justify-center px-4 py-2 rounded-md ${
+                          isDarkMode 
+                            ? 'bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700' // Gradient button
+                            : 'bg-purple-600 hover:bg-purple-700'
+                        } text-white font-medium`}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                          <path d="M5.5 16a3.5 3.5 0 01-.369-6.98 4 4 0 117.753-1.977A4.5 4.5 0 1113.5 16h-8z" />
+                          <path d="M9 12.75l3 3m0 0l3-3m-3 3v-7.5" />
+                        </svg>
+                        Save to Cloud
+                      </button>
                     </div>
                     
                     {/* PDF Preview Section */}
@@ -546,13 +648,9 @@ function Home() {
             )}
           </div>
           
-          {/* Input component (ChatGPT/Gemini style) */}
-          <div className={`mt-8 rounded-lg ${
-            isDarkMode 
-              ? 'bg-gray-800/80 border border-white/10' // Landing page style
-              : 'bg-white'
-          } shadow-lg`}>
-            <form onSubmit={handleSubmit} className="p-4">
+          {/* Input component - Modern design without overlapping */}
+          <div className="mt-8">
+            <form onSubmit={handleSubmit} className="relative">
               {/* Hidden file input */}
               <input 
                 type="file" 
@@ -563,11 +661,11 @@ function Home() {
               
               {/* File preview area */}
               {filePreview && (
-                <div className={`mb-4 p-4 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'} relative`}>
+                <div className={`mb-4 p-4 rounded-2xl ${isDarkMode ? 'bg-gray-800/80' : 'bg-gray-100'} relative shadow-md`}>
                   <button 
                     type="button" 
                     onClick={clearSelectedFile}
-                    className={`absolute top-2 right-2 p-1 rounded-full ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-300 hover:bg-gray-400'}`}
+                    className={`absolute top-3 right-3 p-1.5 rounded-full ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-300 hover:bg-gray-400'} transition-colors`}
                   >
                     <FiX className="w-4 h-4" />
                   </button>
@@ -622,79 +720,93 @@ function Home() {
                 </div>
               )}
               
-              <textarea
-                ref={textareaRef}
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                placeholder={selectedFile ? "Add any additional instructions..." : "Enter text, paste content, or describe what you need..."}
-                className={`w-full p-4 rounded-lg resize-none min-h-[56px] max-h-[120px] overflow-y-auto focus:outline-none border-0 ${
-                  isDarkMode 
-                    ? 'bg-gray-700/80 text-white scrollbar-dark' // Slightly transparent input
-                    : 'bg-white text-gray-900 scrollbar-light'
-                }`}
-              ></textarea>
-              
-              <div className="flex justify-between items-center mt-2">
-                <div className="flex gap-2 items-center">
-                  <button 
-                    type="button" 
-                    className={`p-2 rounded-full ${
-                      isDarkMode ? 'hover:bg-gray-600/80 text-gray-300' : 'hover:bg-gray-100'
-                    }`}
-                    title="Upload document (PDF, TXT)"
-                    onClick={() => triggerFileInput('application/pdf,text/plain')}
-                  >
-                    <HiOutlineDocumentText className="h-5 w-5" />
-                  </button>
-                  <button 
-                    type="button" 
-                    className={`p-2 rounded-full ${
-                      isDarkMode ? 'hover:bg-gray-600/80 text-gray-300' : 'hover:bg-gray-100'
-                    }`}
-                    title="Upload image"
-                    onClick={() => triggerFileInput('image/*')}
-                  >
-                    <FiImage className="h-5 w-5" />
-                  </button>
-                  <button 
-                    type="button" 
-                    className={`p-2 rounded-full ${
-                      isDarkMode ? 'hover:bg-gray-600/80 text-gray-300' : 'hover:bg-gray-100'
-                    }`}
-                    title="Upload audio/video"
-                    onClick={() => triggerFileInput('audio/*,video/*')}
-                  >
-                    <HiOutlineVolumeUp className="h-5 w-5" />
-                  </button>
+              {/* ChatGPT-style input container */}
+              <div className={`rounded-2xl shadow-lg overflow-hidden ${
+                isDarkMode 
+                  ? 'bg-gray-800/90 border border-white/10' 
+                  : 'bg-white shadow-md'
+              }`}>
+                <div className="relative">
+                  <textarea
+                    ref={textareaRef}
+                    value={inputText}
+                    onChange={(e) => setInputText(e.target.value)}
+                    placeholder={selectedFile ? "Add any additional instructions..." : "Input -> Aesthetic Notes"}
+                    className={`w-full p-4 resize-none overflow-y-auto focus:outline-none border-0 ${
+                      isDarkMode 
+                        ? 'bg-transparent text-white scrollbar-dark' 
+                        : 'bg-transparent text-gray-900 scrollbar-light'
+                    } min-h-[44px] max-h-[200px]`}
+                  ></textarea>
                 </div>
                 
-                <button 
-                  type="submit" 
-                  disabled={(!inputText.trim() && !selectedFile) || processing}
-                  className={`p-3 rounded-full ${
-                    (inputText.trim() || selectedFile) && !processing
-                      ? 'bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white' // Gradient button
-                      : `${isDarkMode ? 'bg-gray-600 text-gray-400' : 'bg-gray-200 text-gray-500'}`
-                  } transition-colors flex items-center justify-center`}
-                >
-                  {processing ? (
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  ) : (
-                    <FiSend className="h-5 w-5" />
-                  )}
-                </button>
+                {/* Bottom toolbar for file upload options and send button */}
+                <div className={`flex items-center justify-between px-3 py-2 ${
+                  isDarkMode ? '' : ''
+                }`}>
+                  {/* Left side - file upload buttons */}
+                  <div className="flex gap-1">
+                    <button 
+                      type="button" 
+                      className={`p-2 rounded-full transition-transform hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                        isDarkMode ? 'text-gray-300' : 'text-gray-500'
+                      }`}
+                      title="Upload document (PDF, TXT)"
+                      onClick={() => triggerFileInput('application/pdf,text/plain')}
+                    >
+                      <HiOutlineDocumentText className="h-5 w-5" />
+                    </button>
+                    <button 
+                      type="button" 
+                      className={`p-2 rounded-full transition-transform hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                        isDarkMode ? 'text-gray-300' : 'text-gray-500'
+                      }`}
+                      title="Upload image"
+                      onClick={() => triggerFileInput('image/*')}
+                    >
+                      <FiImage className="h-5 w-5" />
+                    </button>
+                    <button 
+                      type="button" 
+                      className={`p-2 rounded-full transition-transform hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                        isDarkMode ? 'text-gray-300' : 'text-gray-500'
+                      }`}
+                      title="Upload audio/video"
+                      onClick={() => triggerFileInput('audio/*,video/*')}
+                    >
+                      <HiOutlineVolumeUp className="h-5 w-5" />
+                    </button>
+                  </div>
+                  
+                  {/* Right side - send button */}
+                  <button 
+                    type="submit" 
+                    disabled={(!inputText.trim() && !selectedFile) || processing}
+                    className={`p-2.5 rounded-full transition-all ${
+                      (inputText.trim() || selectedFile) && !processing
+                        ? 'bg-black text-white dark:bg-white dark:text-black hover:opacity-80' 
+                        : `${isDarkMode ? 'bg-gray-700 text-gray-500' : 'bg-gray-200 text-gray-400'}`
+                    } flex items-center justify-center w-9 h-9`}
+                  >
+                    {processing ? (
+                      <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                    ) : (
+                      <FiSend className="h-5 w-5" />
+                    )}
+                  </button>
+                </div>
               </div>
+
+              {/* Error display */}
+              {error && (
+                <div className={`mt-6 p-4 rounded-2xl ${
+                  isDarkMode ? 'bg-red-900/30 text-red-200 border border-red-500/30' : 'bg-red-50 text-red-700'
+                }`}>
+                  <p>{error}</p>
+                </div>
+              )}
             </form>
           </div>
-          
-          {/* Error display */}
-          {error && (
-            <div className={`mt-6 p-4 rounded-lg ${
-              isDarkMode ? 'bg-red-900/30 text-red-200 border border-red-500/30' : 'bg-red-50 text-red-700'
-            }`}>
-              <p>{error}</p>
-            </div>
-          )}
         </div>
       </div>
     </div>
