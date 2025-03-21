@@ -124,17 +124,11 @@ router.post('/beautify', upload.single('file'), async (req, res) => {
       output.summary.toLowerCase().includes('cannot process') ||
       output.summary.toLowerCase().includes('unable to');
     
-    // Fixed logic for checking generatePdf - more robust parsing
-    const generatePdf = 
-      req.body.generatePdf === true || 
-      req.body.generatePdf === 'true' || 
-      req.body.generatePdf === '1' || 
-      req.body.generatePdf === 1;
+    // Fixed logic for checking generatePdf - always true
+    // We're keeping the parameter for backward compatibility but always setting it to true
+    const generatePdf = true;
     
-    console.log('PDF Generation Decision:', { 
-      generatePdf,
-      rawInput: req.body.generatePdf
-    });
+    console.log('PDF Generation Decision: Always generating PDF');
     
     // Create the response without PDF initially
     const response = { 

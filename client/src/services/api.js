@@ -66,14 +66,15 @@ const apiService = {
     return api.post('/ai/chat', { message });
   },
   
-  beautify: async (text, inputType = 'text/plain', generatePdf = false) => {
-    console.log('API client - beautify - PDF flag:', { generatePdf, type: typeof generatePdf });
+  beautify: async (text, inputType = 'text/plain', generatePdf = true) => {
+    // Always generate PDF, keep the generatePdf parameter for backward compatibility
+    console.log('API client - beautify - Always generating PDF');
     
     try {
       const response = await api.post('/ai/beautify', { 
         text, 
         inputType, 
-        generatePdf: generatePdf ? 'true' : 'false' 
+        generatePdf: 'true' // Always true
       });
       
       // Log if PDF was received
@@ -89,7 +90,8 @@ const apiService = {
     }
   },
   
-  beautifyWithFile: async (file, inputType = null, additionalText = '', generatePdf = false) => {
+  beautifyWithFile: async (file, inputType = null, additionalText = '', generatePdf = true) => {
+    // Always generate PDF, keep the generatePdf parameter for backward compatibility
     const formData = new FormData();
     formData.append('file', file);
     
@@ -107,23 +109,16 @@ const apiService = {
       formData.append('inputType', inputType);
     }
     
-    // Ensure generatePdf is explicitly sent as a string 'true' or 'false'
-    console.log('API client - beautifyWithFile - PDF flag:', { 
-      generatePdf, 
-      type: typeof generatePdf,
-      convertedValue: generatePdf ? 'true' : 'false'
-    });
-    
-    formData.append('generatePdf', generatePdf ? 'true' : 'false');
+    // Always set generatePdf to true
+    console.log('API client - beautifyWithFile - Always generating PDF');
+    formData.append('generatePdf', 'true');
     
     logger.debug('API', 'Uploading file with FormData', { 
       fileName: file.name, 
       fileSize: file.size, 
       fileType: file.type,
       hasAdditionalText: !!additionalText?.trim(),
-      generatePdf,
-      generatePdfType: typeof generatePdf,
-      generatePdfValue: generatePdf ? 'true' : 'false'
+      generatePdf: true
     });
     
     try {

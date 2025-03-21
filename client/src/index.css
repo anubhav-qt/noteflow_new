@@ -590,4 +590,36 @@ input[type="number"] {
     transform: translateY(-50%) translateX(20px);
   }
 }
-*/
+
+/* Add these animations to your existing index.css file */
+
+@keyframes navButtonHover {
+  0% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+.nav-button:hover {
+  animation: navButtonHover 0.3s ease-in-out;
+}
+
+/* Add a subtle pulse effect to the active button */
+@keyframes activePulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.1);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(59, 130, 246, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+  }
+}
+
+/* Keep existing CSS above this line */

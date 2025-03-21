@@ -1,22 +1,27 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
-// Comment out unused theme selector icons
-// import { FiChevronUp, FiChevronDown, FiCheck } from 'react-icons/fi';
+import { auth } from '../firebase/config'; // Import auth
 
 function LandingPage() {
   const navigate = useNavigate();
   const { currentLandingTheme, landingThemes } = useTheme();
-  // Comment out theme selector state and handlers
-  // const [showThemeSelector, setShowThemeSelector] = useState(false);
   const [animateIn, setAnimateIn] = useState(false);
-  // Comment out unused refs and states for other themes
-  // const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
   const shapesRef = useRef([]);
   const requestRef = useRef();
-  const isFloatingShapesActive = true; // Always true since we're only using floating shapes
+  const isFloatingShapesActive = true;
+  const [user, setUser] = useState(null); // Add user state
+  
+  // Check auth state when component mounts
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged(currentUser => {
+      setUser(currentUser);
+    });
+    
+    return () => unsubscribe();
+  }, []);
 
   // Animate content in on load
   useEffect(() => {
@@ -213,11 +218,21 @@ function LandingPage() {
   
   // Navigate to login or signup page
   const handleLogin = () => {
-    navigate('/login');
+    // If user is already logged in, navigate to dashboard instead
+    if (user) {
+      navigate('/home');
+    } else {
+      navigate('/login');
+    }
   };
   
   const handleSignUp = () => {
-    navigate('/login', { state: { isSignUp: true } });
+    // If user is already logged in, navigate to dashboard instead
+    if (user) {
+      navigate('/home');
+    } else {
+      navigate('/login', { state: { isSignUp: true } });
+    }
   };
   
   // Remove theme selection handlers
@@ -276,7 +291,7 @@ function LandingPage() {
           Revolutionizing note-taking with AI-powered structuring, seamless visualization, and effortless transformation of raw content into beautiful documents.
         </p>
         
-        {/* Custom Buttons Component */}
+        {/* Custom Buttons Component - Update button text if user is logged in */}
         <div className="flex flex-col items-center justify-center w-full max-w-md gap-4 md:flex-row mx-auto">
           {/* Sign Up Button - Primary */}
           <button 
@@ -291,7 +306,9 @@ function LandingPage() {
             
             {/* Button content with glow effect */}
             <div className="relative flex items-center justify-center w-full h-full px-8">
-              <span className="text-white font-semibold text-lg tracking-wider mr-4">Sign Up</span>
+              <span className="text-white font-semibold text-lg tracking-wider mr-4">
+                {user ? 'Home' : 'Sign Up'}
+              </span>
               <div className="absolute right-6 flex items-center justify-center">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-white transform transition-transform duration-300 group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
@@ -303,7 +320,7 @@ function LandingPage() {
             <div className="absolute inset-0 rounded-xl border border-white/20 pointer-events-none"></div>
           </button>
 
-          {/* Log In Button - Secondary */}
+          {/* Log In Button - Secondary or My Notes if logged in */}
           <button 
             onClick={handleLogin}
             className="relative w-full md:w-48 h-14 bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl overflow-hidden group transition-all duration-300 hover:bg-white/15 hover:border-blue-400/50 hover:shadow-lg hover:shadow-blue-500/10"
@@ -313,7 +330,9 @@ function LandingPage() {
             
             {/* Button content */}
             <div className="relative flex items-center justify-center w-full h-full">
-              <span className="text-white font-medium text-lg tracking-wider group-hover:text-white transition-colors duration-300">Log In</span>
+              <span className="text-white font-medium text-lg tracking-wider group-hover:text-white transition-colors duration-300">
+                {user ? 'My Notes' : 'Log In'}
+              </span>
             </div>
           </button>
         </div>

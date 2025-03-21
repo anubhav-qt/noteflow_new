@@ -6,6 +6,7 @@ import { HiOutlineDocumentText, HiOutlinePencil, HiOutlineVolumeUp, HiOutlineBoo
 import { auth } from '../firebase/config';
 import { onAuthStateChanged } from 'firebase/auth';
 import apiService from '../services/api';
+import NavBar from './NavBar';
 
 function Home() {
   const navigate = useNavigate();
@@ -24,7 +25,10 @@ function Home() {
   const [showResults, setShowResults] = useState(false);
   // State for animation
   const [resultAnimation, setResultAnimation] = useState(false);
-  const [generatePdf, setGeneratePdf] = useState(false);
+  // Add a new state for process status tracking
+  const [processingStatus, setProcessingStatus] = useState('');
+  // Add a ref for scrolling to results
+  const resultsRef = useRef(null);
   
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -112,14 +116,10 @@ function Home() {
     }
     
     try {
-      console.log('Home component - PDF generation flag status:', {
-        generatePdf,
-        type: typeof generatePdf
-      });
-      
       setProcessing(true);
       setError(null);
       setResult(null);
+      setProcessingStatus('Analyzing content...');
       
       // Check server health first
       try {
@@ -131,35 +131,48 @@ function Home() {
       let response;
       
       if (selectedFile) {
-        // Handle file upload - make sure generatePdf is being passed correctly
+        // Handle file upload - always generate PDF
+        setProcessingStatus('Processing your file...');
         response = await apiService.beautifyWithFile(
           selectedFile, 
           fileInputType, 
           inputText, 
-          generatePdf // Just pass the boolean directly
+          true // Always generate PDF
         );
       } else {
-        // Handle text input - make sure generatePdf is being passed correctly
+        // Handle text input - always generate PDF
+        setProcessingStatus('Processing your text...');
         response = await apiService.beautify(
           inputText, 
           'text/plain', 
-          generatePdf // Just pass the boolean directly
+          true // Always generate PDF
         );
       }
       
       // Set the initial result without PDF
       setResult(response.data);
       
+      // Show results immediately after getting the summary
+      setShowResults(true);
+      setTimeout(() => {
+        setResultAnimation(true);
+        
+        // Scroll to the results after showing them
+        if (resultsRef.current) {
+          resultsRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, 100);
+      
+      // Update processing status to indicate the next steps
+      setProcessingStatus('Generating visual elements and PDF...');
+      
       // If we have diagram or flowchart prompts, generate the visuals
       if ((response.data.fullOutput.diagram_prompts?.length > 0) || 
           (response.data.fullOutput.flowcharts_prompt?.length > 0)) {
         
         try {
-          // Show a notification that visuals are being generated
-          setResult(prevResult => ({
-            ...prevResult,
-            generatingVisuals: true
-          }));
+          // Update processing status for visuals generation
+          setProcessingStatus('Generating visual elements...');
           
           // Call the visuals generation endpoint
           const visualsResponse = await apiService.generateVisuals(
@@ -168,83 +181,79 @@ function Home() {
             response.data.fullOutput.concepts_flowcharts
           );
           
-          // Update the result with the generated visuals
-          setResult(prevResult => ({
-            ...prevResult,
-            generatingVisuals: false,
-            visuals: visualsResponse.data
-          }));
+          // Update processing status for PDF generation
+          setProcessingStatus('Creating your PDF document...');
           
-          // If PDF was requested, generate it now that we have the visuals
-          if (generatePdf || response.data.pdfRequested) {
-            setResult(prevResult => ({
-              ...prevResult,
-              generatingPdf: true
-            }));
-            
-            // Generate PDF with all content including visuals
-            const pdfResponse = await apiService.generatePdf(
-              response.data,
-              visualsResponse.data.diagrams,
-              visualsResponse.data.flowcharts
-            );
-            
-            // Process PDF response
-            if (pdfResponse.data.pdf) {
-              console.log('PDF data received after visuals, creating blob and URL...');
-              try {
-                // Convert base64 to blob
-                const byteString = atob(pdfResponse.data.pdf);
-                const ab = new ArrayBuffer(byteString.length);
-                const ia = new Uint8Array(ab);
-                for (let i = 0; i < byteString.length; i++) {
-                  ia[i] = byteString.charCodeAt(i);
-                }
-                const pdfBlob = new Blob([ab], { type: 'application/pdf' });
-                
-                // Create a URL for the blob
-                const pdfUrl = URL.createObjectURL(pdfBlob);
-                console.log('Created PDF URL after visuals:', pdfUrl);
-                
-                // Store the blob in a global variable to prevent garbage collection
-                window._pdfBlob = pdfBlob;
-                
-                // Update the result with the PDF URL
-                setResult(prevResult => ({
-                  ...prevResult,
-                  pdfUrl: pdfUrl,
-                  generatingPdf: false
-                }));
-              } catch (pdfError) {
-                console.error('Error processing PDF data:', pdfError);
-                setResult(prevResult => ({
-                  ...prevResult,
-                  pdfError: pdfError.message,
-                  generatingPdf: false
-                }));
+          // Generate PDF with all content including visuals
+          const pdfResponse = await apiService.generatePdf(
+            response.data,
+            visualsResponse.data.diagrams,
+            visualsResponse.data.flowcharts
+          );
+          
+          // Process PDF response
+          if (pdfResponse.data.pdf) {
+            try {
+              // Convert base64 to blob
+              const byteString = atob(pdfResponse.data.pdf);
+              const ab = new ArrayBuffer(byteString.length);
+              const ia = new Uint8Array(ab);
+              for (let i = 0; i < byteString.length; i++) {
+                ia[i] = byteString.charCodeAt(i);
               }
-            } else {
+              const pdfBlob = new Blob([ab], { type: 'application/pdf' });
+              
+              // Create a URL for the blob
+              const pdfUrl = URL.createObjectURL(pdfBlob);
+              
+              // Store the blob in a global variable to prevent garbage collection
+              window._pdfBlob = pdfBlob;
+              
+              // Update the result with the PDF URL
               setResult(prevResult => ({
                 ...prevResult,
-                pdfError: "No PDF data received",
-                generatingPdf: false
+                pdfUrl: pdfUrl,
+                visuals: visualsResponse.data // Store visuals but we won't display them
               }));
+              
+              // Clear the processing status when done
+              setProcessingStatus('');
+              
+              // Scroll to the PDF section
+              setTimeout(() => {
+                if (resultsRef.current) {
+                  const pdfSection = document.getElementById('pdf-section');
+                  if (pdfSection) {
+                    pdfSection.scrollIntoView({ behavior: 'smooth' });
+                  }
+                }
+              }, 300);
+            } catch (pdfError) {
+              console.error('Error processing PDF data:', pdfError);
+              setResult(prevResult => ({
+                ...prevResult,
+                pdfError: pdfError.message
+              }));
+              setProcessingStatus('');
             }
+          } else {
+            setResult(prevResult => ({
+              ...prevResult,
+              pdfError: "No PDF data received"
+            }));
+            setProcessingStatus('');
           }
         } catch (visualErr) {
           // Update the result with the error
           setResult(prevResult => ({
             ...prevResult,
-            generatingVisuals: false,
             visualsError: visualErr.message
           }));
+          setProcessingStatus('');
         }
-      } else if (generatePdf || response.data.pdfRequested) {
-        // No visuals to generate, but PDF was requested
-        setResult(prevResult => ({
-          ...prevResult,
-          generatingPdf: true
-        }));
+      } else {
+        // No visuals to generate, but still generate PDF
+        setProcessingStatus('Creating your PDF document...');
         
         // Generate PDF without visuals
         const pdfResponse = await apiService.generatePdf(
@@ -255,7 +264,6 @@ function Home() {
         
         // Process PDF response
         if (pdfResponse.data.pdf) {
-          console.log('PDF data received (no visuals), creating blob and URL...');
           try {
             // Convert base64 to blob
             const byteString = atob(pdfResponse.data.pdf);
@@ -268,7 +276,6 @@ function Home() {
             
             // Create a URL for the blob
             const pdfUrl = URL.createObjectURL(pdfBlob);
-            console.log('Created PDF URL (no visuals):', pdfUrl);
             
             // Store the blob in a global variable to prevent garbage collection
             window._pdfBlob = pdfBlob;
@@ -276,23 +283,32 @@ function Home() {
             // Update the result with the PDF URL
             setResult(prevResult => ({
               ...prevResult,
-              pdfUrl: pdfUrl,
-              generatingPdf: false
+              pdfUrl: pdfUrl
             }));
+            
+            // Clear the processing status when done
+            setProcessingStatus('');
+            
+            // Scroll to the results
+            setTimeout(() => {
+              if (resultsRef.current) {
+                resultsRef.current.scrollIntoView({ behavior: 'smooth' });
+              }
+            }, 500);
           } catch (pdfError) {
             console.error('Error processing PDF data:', pdfError);
             setResult(prevResult => ({
               ...prevResult,
-              pdfError: pdfError.message,
-              generatingPdf: false
+              pdfError: pdfError.message
             }));
+            setProcessingStatus('');
           }
         } else {
           setResult(prevResult => ({
             ...prevResult,
-            pdfError: "No PDF data received",
-            generatingPdf: false
+            pdfError: "No PDF data received"
           }));
+          setProcessingStatus('');
         }
       }
       
@@ -310,6 +326,7 @@ function Home() {
                           err.message || 
                           'Failed to process your input. Please try again.';
       setError(errorMessage);
+      setProcessingStatus('');
     } finally {
       setProcessing(false);
     }
@@ -363,45 +380,29 @@ function Home() {
   }, [inputText]);
 
   return (
-    <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? 'bg-gray-900 text-white' : 'bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 text-gray-900'}`}>
+    <div className={`min-h-screen transition-colors duration-300 ${
+      isDarkMode 
+        ? 'bg-[#0F172A] text-white' // Landing page dark background color
+        : 'bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 text-gray-900'
+    }`}>
       <div className="container mx-auto px-4 py-2">
-        {/* Header with theme toggle */}
-        <div className="flex justify-between items-center mb-12">
-          <h1 className="text-3xl font-bold">NoteFlow</h1>
-          <div className="flex items-center gap-4">
-            {user ? (
-              <button 
-                onClick={goToDashboard}
-                className={`px-4 py-2 rounded-md flex items-center gap-2 ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-white hover:bg-gray-100 text-gray-800'} transition-colors`}
-              >
-                <FiUser className="h-5 w-5" />
-                <span>Dashboard</span>
-              </button>
-            ) : (
-              <button 
-                onClick={goToLogin}
-                className={`px-4 py-2 rounded-md flex items-center gap-2 ${isDarkMode ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-600 hover:bg-blue-700 text-white'} transition-colors`}
-              >
-                <FiLogIn className="h-5 w-5" />
-                <span>Login</span>
-              </button>
-            )}
-            
-            <button 
-              onClick={toggleTheme} 
-              className={`p-2 rounded-full ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-white hover:bg-gray-100 text-gray-800'} transition-colors`}
-            >
-              {isDarkMode ? <FiSun className="h-5 w-5" /> : <FiMoon className="h-5 w-5" />}
-            </button>
-          </div>
-        </div>
+        {/* Replace the existing header with the NavBar component */}
+        <NavBar user={user} />
         
         {/* Main content */}
         <div className="max-w-4xl mx-auto">
+          {/* Rest of the existing code */}
+          
           {/* Conditional rendering based on showResults state */}
-          <div className={`transition-all duration-300 transform ${showResults ? 'opacity-0 scale-95 h-0 overflow-hidden' : 'opacity-100 scale-100'}`}>
-            <h1 className={`text-5xl font-bold text-center mb-12 ${isDarkMode ? 'text-white' : 'text-gray-800'}`}>
-              Create Beautiful Notes
+          <div className={`transition-all duration-300 transform ${
+            showResults ? 'opacity-0 scale-95 h-0 overflow-hidden' : 'opacity-100 scale-100'
+          } flex flex-col justify-center`}> {/* Added flexbox centering */}
+            <h1 className={`text-5xl font-bold text-center mb-12 ${
+              isDarkMode 
+                ? 'bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500' // Gradient text like landing page
+                : 'text-gray-800'
+            }`}>
+              Create Aesthetic Notes
             </h1>
             
             {/* Input source cards */}
@@ -412,12 +413,14 @@ function Home() {
                   onClick={() => handleCardClick(card.id)}
                   className={`cursor-pointer p-6 rounded-xl transition-all duration-300 transform hover:scale-105 ${
                     isDarkMode 
-                      ? 'bg-gray-800 hover:bg-gray-700 shadow-lg shadow-gray-800/50' 
+                      ? 'bg-gray-800/50 hover:bg-gray-700/50 shadow-lg border border-white/5' // More landing-page like styling 
                       : 'bg-white hover:shadow-xl shadow-md'
                   }`}
                 >
                   <div className="flex flex-col items-center text-center">
-                    <div className={`mb-4 ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`}>
+                    <div className={`mb-4 ${
+                      isDarkMode ? 'text-blue-400' : 'text-blue-600'
+                    }`}>
                       {card.icon}
                     </div>
                     <h3 className="font-medium">{card.title}</h3>
@@ -427,231 +430,128 @@ function Home() {
             </div>
           </div>
           
-          {/* Results section with animation */}
+          {/* Results section with animation - Updated for better layout */}
           <div 
             className={`transition-all duration-500 transform ${
               showResults && resultAnimation 
                 ? 'opacity-100 translate-y-0' 
                 : 'opacity-0 translate-y-10 h-0 overflow-hidden'
             }`}
+            ref={resultsRef}
           >
             {result && (
-              <div className="mb-8">
+              <div className={`mb-8 overflow-auto max-h-[60vh] pr-4 ${  // Added pr-4 for right padding
+                isDarkMode ? 'scrollbar-dark' : 'scrollbar-light'
+              }`}>
                 <button 
                   onClick={handleBackToInput} 
                   className={`mb-6 flex items-center gap-2 py-2 px-4 rounded-md ${
-                    isDarkMode ? 'bg-gray-800 hover:bg-gray-700' : 'bg-white hover:bg-gray-100'
+                    isDarkMode 
+                      ? 'bg-gray-800/80 hover:bg-gray-700/80 border border-white/10' // Landing page style 
+                      : 'bg-white hover:bg-gray-100'
                   } transition-colors`}
                 >
                   <FiArrowLeft className="h-5 w-5" />
                   <span>Back to Input</span>
                 </button>
                 
-                <div className={`p-6 rounded-lg ${isDarkMode ? 'bg-gray-800' : 'bg-white'} shadow-lg`}>
-                  <h2 className="text-xl font-bold mb-4">Result</h2>
-                  <div className="prose max-w-none dark:prose-invert">
-                    <h3 className="text-lg font-semibold mb-2">Summary</h3>
-                    <p className="mb-4">{result.summary}</p>
-                    
-                    {/* Add warning for potentially blank or unprocessable files */}
-                    {result.summary.toLowerCase().includes('blank') || 
-                     result.summary.toLowerCase().includes('empty') || 
-                     result.summary.toLowerCase().includes('cannot process') || 
-                     result.summary.toLowerCase().includes('unable to') ? (
-                      <div className={`p-4 mb-4 rounded-lg ${isDarkMode ? 'bg-yellow-900/30 text-yellow-200' : 'bg-yellow-50 text-yellow-800'}`}>
-                        <p className="font-medium">⚠️ The file may be blank or in a format that can't be properly processed.</p>
-                        <p className="text-sm mt-1">Try uploading a different file or providing more context in the text input.</p>
-                      </div>
-                    ) : null}
-                    
-                    {result.hasDiagrams && (
-                      <div className="mb-4">
-                        <h3 className="text-lg font-semibold mb-2">Diagrams</h3>
-                        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-700' : 'bg-gray-100'}`}>
-                          <p className="mb-2">This content includes concepts that would benefit from visual diagrams:</p>
-                          <ul className="list-disc ml-5 space-y-1">
-                            {result.fullOutput.concepts_diagram.map((concept, idx) => (
-                              <li key={idx}>{concept}</li>
-                            ))}
-                          </ul>
+                {/* Summary Card - Always shows immediately after beautify call returns */}
+                <div className={`p-6 rounded-lg ${
+                  isDarkMode 
+                    ? 'bg-gray-800/70 border border-white/10' // Lighter background, thin border
+                    : 'bg-white'
+                } shadow-lg mb-6`}>
+                  <h2 className="text-xl font-bold mb-4">Summary</h2>
+                  <p className="mb-4 text-lg">{result.summary}</p>
+                  
+                  {/* Add warning for potentially blank or unprocessable files */}
+                  {result.summary.toLowerCase().includes('blank') || 
+                   result.summary.toLowerCase().includes('empty') || 
+                   result.summary.toLowerCase().includes('cannot process') || 
+                   result.summary.toLowerCase().includes('unable to') ? (
+                    <div className={`p-4 mb-4 rounded-lg ${isDarkMode ? 'bg-yellow-900/30 text-yellow-200' : 'bg-yellow-50 text-yellow-800'}`}>
+                      <p className="font-medium">⚠️ The file may be blank or in a format that can't be properly processed.</p>
+                      <p className="text-sm mt-1">Try uploading a different file or providing more context in the text input.</p>
+                    </div>
+                  ) : null}
+                  
+                  {/* Show processing status if any - Make this more prominent */}
+                  {processingStatus && (
+                    <div className={`mt-6 p-4 rounded-lg animate-pulse ${
+                      isDarkMode ? 'bg-blue-900/20 border border-blue-500/30' : 'bg-blue-50'
+                    }`}>
+                      <div className="flex items-center">
+                        <div className="mr-3">
+                          <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
                         </div>
-                      </div>
-                    )}
-                    
-                    {result.hasFlowcharts && (
-                      <div className="mb-4">
-                        <h3 className="text-lg font-semibold mb-2">Flowcharts</h3>
-                        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-700' : 'bg-gray-100'}`}>
-                          <p className="mb-2">This content includes processes that would benefit from flowchart visualization:</p>
-                          <ul className="list-disc ml-5 space-y-1">
-                            {result.fullOutput.concepts_flowcharts.map((concept, idx) => (
-                              <li key={idx}>{concept}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* Show loading state for visuals generation */}
-                    {result.generatingVisuals && (
-                      <div className={`mt-4 p-4 rounded-lg ${isDarkMode ? 'bg-gray-700' : 'bg-gray-100'}`}>
-                        <div className="flex items-center">
-                          <div className="mr-3">
-                            <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                          </div>
-                          <p>Generating visual elements. This may take a few moments...</p>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* Display visuals error if any */}
-                    {result.visualsError && (
-                      <div className={`mt-4 p-4 rounded-lg ${isDarkMode ? 'bg-red-900/30 text-red-200' : 'bg-red-50 text-red-700'}`}>
-                        <p className="font-medium">Error generating visuals:</p>
-                        <p>{result.visualsError}</p>
-                      </div>
-                    )}
-                    
-                    {/* Display generated diagrams */}
-                    {result.visuals?.diagrams?.length > 0 && (
-                      <div className="mt-6">
-                        <h3 className="text-lg font-semibold mb-3">Generated Diagrams</h3>
-                        <div className="grid grid-cols-1 gap-6">
-                          {result.visuals.diagrams.map((diagram, idx) => (
-                            <div key={`diagram-${idx}`} className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-700' : 'bg-gray-100'}`}>
-                              <h4 className="font-medium mb-2">{result.fullOutput.concepts_diagram[diagram.index]}</h4>
-                              {diagram.error ? (
-                                <p className="text-red-500">{diagram.error}</p>
-                              ) : (
-                                <div className="flex justify-center">
-                                  <img 
-                                    src={`data:image/png;base64,${diagram.image}`}
-                                    alt={`Diagram for ${result.fullOutput.concepts_diagram[diagram.index]}`}
-                                    className="max-w-full rounded-md"
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* Display generated flowcharts */}
-                    {result.visuals?.flowcharts?.length > 0 && (
-                      <div className="mt-6">
-                        <h3 className="text-lg font-semibold mb-3">Generated Flowcharts</h3>
-                        <div className="grid grid-cols-1 gap-6">
-                          {result.visuals.flowcharts.map((flowchart, idx) => (
-                            <div key={`flowchart-${idx}`} className={`p-4 rounded-lg ${isDarkMode ? 'bg-gray-700' : 'bg-gray-100'}`}>
-                              <h4 className="font-medium mb-2">{flowchart.name}</h4>
-                              {flowchart.error ? (
-                                <p className="text-red-500">{flowchart.error}</p>
-                              ) : (
-                                <div className="flex justify-center">
-                                  <img 
-                                    src={`data:image/png;base64,${flowchart.image}`}
-                                    alt={`Flowchart for ${flowchart.name}`}
-                                    className="max-w-full rounded-md"
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* Add PDF buttons with fixed URLs - add more debug info */}
-                    {result?.pdfUrl && (
-                      <div className="mt-6 border-t pt-4 border-gray-300 dark:border-gray-700">
-                        <h3 className="text-lg font-semibold mb-3">PDF Document</h3>
-                        <div className="flex flex-col sm:flex-row gap-3">
-                          {/* Download Link - Method 1 */}
-                          <a 
-                            href={result.pdfUrl} 
-                            download="noteflow-document.pdf"
-                            className={`inline-flex items-center px-4 py-2 rounded-md ${
-                              isDarkMode ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-600 hover:bg-blue-700'
-                            } text-white font-medium`}
-                            onClick={(e) => {
-                              console.log('Download PDF clicked with URL:', result.pdfUrl);
-                            }}
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
-                            </svg>
-                            Download PDF
-                          </a>
-                          
-                          {/* View PDF in Browser - Method 2 */}
-                          <button
-                            onClick={() => {
-                              console.log('Opening PDF in new window:', result.pdfUrl);
-                              window.open(result.pdfUrl, '_blank');
-                            }}
-                            className={`inline-flex items-center px-4 py-2 rounded-md ${
-                              isDarkMode ? 'bg-green-600 hover:bg-green-700' : 'bg-green-600 hover:bg-green-700'
-                            } text-white font-medium`}
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                              <path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z" />
-                              <path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z" />
-                            </svg>
-                            View PDF in Browser
-                          </button>
-                        </div>
-                        
-                        {/* PDF Preview Section */}
-                        <div className="mt-4">
-                          <h4 className="text-md font-medium mb-2">Preview</h4>
-                          <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden" style={{height: '300px'}}>
-                            <iframe 
-                              src={result.pdfUrl} 
-                              className="w-full h-full" 
-                              title="PDF Preview"
-                            ></iframe>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* Add PDF modal/overlay for viewing PDFs inline */}
-                    <div 
-                      id="pdf-modal" 
-                      className="hidden fixed inset-0 bg-black bg-opacity-75 z-50 flex items-center justify-center p-4"
-                      onClick={(e) => {
-                        // Close modal when clicking outside the iframe
-                        if (e.target.id === 'pdf-modal') {
-                          document.getElementById('pdf-modal').classList.add('hidden');
-                          document.getElementById('pdf-iframe').src = '';
-                        }
-                      }}
-                    >
-                      <div className="bg-white rounded-lg overflow-hidden w-full max-w-5xl h-[80vh] flex flex-col">
-                        <div className="flex justify-between items-center bg-gray-100 px-4 py-2">
-                          <h3 className="font-medium">PDF Document</h3>
-                          <button 
-                            onClick={() => {
-                              document.getElementById('pdf-modal').classList.add('hidden');
-                              document.getElementById('pdf-iframe').src = '';
-                            }}
-                            className="p-1 rounded-full hover:bg-gray-200"
-                          >
-                            <FiX className="w-5 h-5" />
-                          </button>
-                        </div>
-                        <iframe id="pdf-iframe" className="flex-1 w-full" title="PDF Viewer"></iframe>
+                        <p className={`font-medium ${isDarkMode ? 'text-blue-300' : 'text-blue-700'}`}>{processingStatus}</p>
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
+                
+                {/* PDF Document Card - Only shown when ready */}
+                {result?.pdfUrl && (
+                  <div id="pdf-section" className={`p-6 rounded-lg ${
+                    isDarkMode 
+                      ? 'bg-gray-800/70 border border-white/10' // Lighter background, thin border
+                      : 'bg-white'
+                  } shadow-lg`}>
+                    <h2 className="text-xl font-bold mb-4">PDF Document</h2>
+                    
+                    {/* PDF action buttons */}
+                    <div className="flex flex-col sm:flex-row gap-3 mb-5">
+                      <a 
+                        href={result.pdfUrl} 
+                        download="noteflow-document.pdf"
+                        className={`inline-flex items-center justify-center px-4 py-2 rounded-md ${
+                          isDarkMode 
+                            ? 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700' // Gradient button
+                            : 'bg-blue-600 hover:bg-blue-700'
+                        } text-white font-medium`}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
+                        </svg>
+                        Download PDF
+                      </a>
+                      
+                      <button
+                        onClick={() => window.open(result.pdfUrl, '_blank')}
+                        className={`inline-flex items-center justify-center px-4 py-2 rounded-md ${
+                          isDarkMode 
+                            ? 'bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700' // Gradient button
+                            : 'bg-green-600 hover:bg-green-700'
+                        } text-white font-medium`}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                          <path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z" />
+                          <path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z" />
+                        </svg>
+                        View PDF in Browser
+                      </button>
+                    </div>
+                    
+                    {/* PDF Preview Section */}
+                    <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden" style={{height: '500px'}}>
+                      <iframe 
+                        src={result.pdfUrl} 
+                        className="w-full h-full" 
+                        title="PDF Preview"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
           
           {/* Input component (ChatGPT/Gemini style) */}
-          <div className={`mt-8 rounded-lg ${isDarkMode ? 'bg-gray-700' : 'bg-white'} shadow-lg`}>
+          <div className={`mt-8 rounded-lg ${
+            isDarkMode 
+              ? 'bg-gray-800/80 border border-white/10' // Landing page style
+              : 'bg-white'
+          } shadow-lg`}>
             <form onSubmit={handleSubmit} className="p-4">
               {/* Hidden file input */}
               <input 
@@ -729,20 +629,18 @@ function Home() {
                 placeholder={selectedFile ? "Add any additional instructions..." : "Enter text, paste content, or describe what you need..."}
                 className={`w-full p-4 rounded-lg resize-none min-h-[56px] max-h-[120px] overflow-y-auto focus:outline-none border-0 ${
                   isDarkMode 
-                    ? 'bg-gray-700 text-white scrollbar-dark' 
+                    ? 'bg-gray-700/80 text-white scrollbar-dark' // Slightly transparent input
                     : 'bg-white text-gray-900 scrollbar-light'
                 }`}
-                style={{
-                  scrollbarWidth: 'thin',
-                  scrollbarColor: isDarkMode ? '#4B5563 #1F2937' : '#E5E7EB #F3F4F6'
-                }}
               ></textarea>
               
               <div className="flex justify-between items-center mt-2">
                 <div className="flex gap-2 items-center">
                   <button 
                     type="button" 
-                    className={`p-2 rounded-full ${isDarkMode ? 'hover:bg-gray-600' : 'hover:bg-gray-100'}`}
+                    className={`p-2 rounded-full ${
+                      isDarkMode ? 'hover:bg-gray-600/80 text-gray-300' : 'hover:bg-gray-100'
+                    }`}
                     title="Upload document (PDF, TXT)"
                     onClick={() => triggerFileInput('application/pdf,text/plain')}
                   >
@@ -750,7 +648,9 @@ function Home() {
                   </button>
                   <button 
                     type="button" 
-                    className={`p-2 rounded-full ${isDarkMode ? 'hover:bg-gray-600' : 'hover:bg-gray-100'}`}
+                    className={`p-2 rounded-full ${
+                      isDarkMode ? 'hover:bg-gray-600/80 text-gray-300' : 'hover:bg-gray-100'
+                    }`}
                     title="Upload image"
                     onClick={() => triggerFileInput('image/*')}
                   >
@@ -758,34 +658,14 @@ function Home() {
                   </button>
                   <button 
                     type="button" 
-                    className={`p-2 rounded-full ${isDarkMode ? 'hover:bg-gray-600' : 'hover:bg-gray-100'}`}
+                    className={`p-2 rounded-full ${
+                      isDarkMode ? 'hover:bg-gray-600/80 text-gray-300' : 'hover:bg-gray-100'
+                    }`}
                     title="Upload audio/video"
                     onClick={() => triggerFileInput('audio/*,video/*')}
                   >
                     <HiOutlineVolumeUp className="h-5 w-5" />
                   </button>
-                  
-                  {/* Enhanced PDF option toggle with better debugging */}
-                  <div className="flex items-center ml-4">
-                    <input
-                      type="checkbox"
-                      id="generatePdf"
-                      checked={generatePdf}
-                      onChange={(e) => {
-                        const newValue = e.target.checked;
-                        console.log('PDF checkbox changed:', { 
-                          oldValue: generatePdf,
-                          newValue: newValue,
-                          type: typeof newValue
-                        });
-                        setGeneratePdf(newValue);
-                      }}
-                      className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                    />
-                    <label htmlFor="generatePdf" className="ml-2 text-sm font-medium">
-                      Generate PDF ({String(generatePdf)})
-                    </label>
-                  </div>
                 </div>
                 
                 <button 
@@ -793,7 +673,7 @@ function Home() {
                   disabled={(!inputText.trim() && !selectedFile) || processing}
                   className={`p-3 rounded-full ${
                     (inputText.trim() || selectedFile) && !processing
-                      ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                      ? 'bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white' // Gradient button
                       : `${isDarkMode ? 'bg-gray-600 text-gray-400' : 'bg-gray-200 text-gray-500'}`
                   } transition-colors flex items-center justify-center`}
                 >
@@ -809,7 +689,9 @@ function Home() {
           
           {/* Error display */}
           {error && (
-            <div className={`mt-6 p-4 rounded-lg ${isDarkMode ? 'bg-red-900/30 text-red-200' : 'bg-red-50 text-red-700'}`}>
+            <div className={`mt-6 p-4 rounded-lg ${
+              isDarkMode ? 'bg-red-900/30 text-red-200 border border-red-500/30' : 'bg-red-50 text-red-700'
+            }`}>
               <p>{error}</p>
             </div>
           )}
